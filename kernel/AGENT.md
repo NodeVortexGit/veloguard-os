@@ -5,18 +5,23 @@ still builds with our delta, and ship it** — the "compare our kernel to Linus'
 agent. It works on the *delta* in this repo; it never commits kernel source.
 
 ## Inputs it reads
-- `kernel/BASE` — the upstream tag we're pinned to (e.g. `v7.0`).
+- `kernel/BASE` — the upstream release tag we're pinned to (e.g. `v7.2.11`).
 - `kernel/patches/*.patch` — our source deltas (none yet).
 - `../veloguard/kernel/veloguardos-*.config` — our config fragments.
-- Linus's tree at `/home/nodevortex/VeloGuardOS` (`origin = torvalds/linux`).
+- Linus's tree at `/home/nodevortex/VeloGuardOS` (`origin = torvalds/linux`)
+  plus a `stable` remote (`git remote add stable https://github.com/gregkh/linux`):
+  mainline only tags `vX.Y`; the point releases that carry security fixes
+  (`vX.Y.Z`) exist only in the stable tree.
 
 ## The loop
 
-1. **Compare.** Fetch Linus and find the latest stable tag:
+1. **Compare.** Fetch both trees and find the newest release tag:
    ```bash
-   cd /home/nodevortex/VeloGuardOS && git fetch --tags --prune origin
-   latest=$(git tag --list 'v*' --sort=-v:refname | grep -vE '\-rc' | head -1)
+   cd /home/nodevortex/VeloGuardOS && git fetch --tags --prune origin && git fetch --tags stable
+   latest=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1)
    ```
+   A non-LTS series goes end-of-life a few weeks after the next one ships —
+   staying on an EOL `BASE` means no more security fixes (v7.0 sat EOL).
    If `latest` == `kernel/BASE`, nothing to do.
 
 2. **Validate the delta against the new tag** (catches dropped config symbols and
@@ -41,10 +46,11 @@ agent. It works on the *delta* in this repo; it never commits kernel source.
    git push                               # CI builds the package, publishes a Release
    ```
 
-4. **Hand off to the human for the trust step.** CI emits `out/kernel-manifest.json`
-   (real sha256). Fold its block into `manifest.json`, then **sign with the
-   offline release key** (`keys/SIGNING.md`) and push. The agent must **not** hold
-   the signing key.
+4. **Hand off to the human for the trust step.** CI emits both packages and
+   `out/kernel-manifest.json` (real sha256s, including the `headers` sub-block).
+   Publish **both** packages to the Release, fold the block into `manifest.json`,
+   then **sign with the offline release key** (`keys/SIGNING.md`) and push. The
+   agent must **not** hold the signing key.
 
 After that, users' `veloguard-update.timer` stages the new signed kernel in the
 background and offers it on the next restart (opt-in checkbox → apply on reboot).

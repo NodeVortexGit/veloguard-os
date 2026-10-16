@@ -3,11 +3,19 @@
 # VeloGuardOS kernel = upstream Linux (pinned by ../BASE) + our config fragments
 # + our patches. Built once in CI, shipped to users as a prebuilt offline update.
 #
+# Split package:
+#   linux-veloguard          the kernel + modules
+#   linux-veloguard-headers  build tree for out-of-tree modules — without it
+#                            DKMS can't build nvidia-open-dkms / broadcom-wl-dkms
+#                            for this kernel, so NVIDIA machines boot with no GPU
+#                            driver (nvidia-utils blacklists nouveau).
+#
 # pkgver is injected from kernel/BASE by build-recipe.sh (which replaces the
-# __PKGVER__ token). The config fragments and any patches/*.patch are staged
-# next to this PKGBUILD by build-recipe.sh before makepkg runs.
+# __PKGVER__ token). The config fragments, the config audit and any
+# patches/*.patch are staged next to this PKGBUILD by build-recipe.sh.
 
-pkgname=linux-veloguard
+pkgbase=linux-veloguard
+pkgname=("$pkgbase" "$pkgbase-headers")
 pkgver=__PKGVER__
 pkgrel=1
 _srcname="linux-${pkgver}"
@@ -15,18 +23,19 @@ pkgdesc='The VeloGuardOS Linux kernel and modules'
 url='https://github.com/IVELINYTBG1/veloguard-os'
 arch=(x86_64)
 license=(GPL-2.0-only)
-makedepends=(bc cpio gettext libelf pahole perl python tar xz zstd kmod git)
+makedepends=(bc cpio gettext libelf openssl pahole perl python tar xz zstd kmod git)
 options=('!debug' '!strip')
 # The upstream source tarball is produced by build-recipe.sh via a shallow
-# `git archive` of the BASE tag from torvalds/linux (the same tree the agent
-# compares against) — so we never depend on kernel.org tarball hosting.
+# `git archive` of the BASE tag (torvalds/linux for vX.Y, the stable tree for
+# vX.Y.Z) — so we never depend on kernel.org tarball hosting.
 source=(
   "${_srcname}.tar"
   veloguardos-base.config
   veloguardos-desktop.config
   veloguardos-hardware.config
+  audit-config.sh
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 export KBUILD_BUILD_HOST=veloguardos
 export KBUILD_BUILD_USER=$pkgbase
@@ -44,15 +53,23 @@ prepare() {
   done
 
   echo "Building base config (x86_64_defconfig) + VeloGuard fragments…"
+  local frags=("$srcdir"/veloguardos-{base,desktop,hardware}.config)
   make x86_64_defconfig
-  scripts/kconfig/merge_config.sh -m .config \
-    "$srcdir/veloguardos-base.config" \
-    "$srcdir/veloguardos-desktop.config" \
-    "$srcdir/veloguardos-hardware.config"
+  scripts/kconfig/merge_config.sh -m .config "${frags[@]}"
   make olddefconfig
 
+  # Kconfig silently drops symbols whose dependencies aren't met; a kernel
+  # built from such a config compiles fine and then fails at runtime (no
+  # firmware, no root disk…). Refuse to build a silently-degraded kernel.
+  echo "Auditing the resolved config against the fragments…"
+  bash "$srcdir/audit-config.sh" .config "${frags[@]}" >/dev/null
+
+  # kernelrelease only sees CONFIG_LOCALVERSION ("-veloguard") once
+  # include/config/auto.conf exists — sync it now, or `version` would say
+  # 7.x.y while modules_install writes 7.x.y-veloguard (split-brain package).
+  make -s syncconfig
   make -s kernelrelease > version
-  echo "Prepared $(cat version)"
+  echo "Prepared $(<version)"
 }
 
 build() {
@@ -60,18 +77,21 @@ build() {
   make all
 }
 
-package() {
+_package() {
+  pkgdesc='The VeloGuardOS Linux kernel and modules'
   depends=(coreutils kmod initramfs)
   optdepends=('wireless-regdb: to set the correct wireless channels'
-              'linux-firmware: firmware images for most hardware')
-  provides=(WIREGUARD-MODULE KSMBD-MODULE)
+              'linux-firmware: firmware images for most hardware'
+              'sof-firmware: firmware for Intel/AMD laptop audio DSPs')
+  provides=(WIREGUARD-MODULE VIRTUALBOX-GUEST-MODULES)
 
   cd "$_srcname"
   local kernver; kernver="$(<version)"
   local modulesdir="$pkgdir/usr/lib/modules/$kernver"
 
   echo "Installing boot image…"
-  # systemd expects the image at the modules dir; mkinitcpio + bootloader pick it up.
+  # systemd expects the image at the modules dir; mkinitcpio's pacman hook
+  # copies it to /boot/vmlinuz-$pkgbase and builds the matching initramfs.
   install -Dm644 "$(make -s image_name)" "$modulesdir/vmlinuz"
   echo "$pkgbase" | install -Dm644 /dev/stdin "$modulesdir/pkgbase"
 
@@ -79,6 +99,68 @@ package() {
   ZSTD_CLEVEL=19 make INSTALL_MOD_PATH="$pkgdir/usr" INSTALL_MOD_STRIP=1 \
     DEPMOD=/doesnt/exist modules_install
 
-  # Remove the build/source symlinks (no -headers subpackage shipped yet).
+  # The headers package owns build/; drop the symlink into $srcdir.
   rm -f "$modulesdir"/{source,build}
 }
+
+_package-headers() {
+  pkgdesc='Headers and scripts for building modules for the VeloGuardOS kernel'
+  depends=(pahole)
+
+  cd "$_srcname"
+  local builddir="$pkgdir/usr/lib/modules/$(<version)/build"
+
+  echo "Installing build files…"
+  install -Dt "$builddir" -m644 .config Makefile Module.symvers System.map version
+  install -Dt "$builddir/kernel" -m644 kernel/Makefile
+  install -Dt "$builddir/arch/x86" -m644 arch/x86/Makefile
+  cp -t "$builddir" -a scripts
+  # objtool runs on every x86 out-of-tree object (CONFIG_OBJTOOL)
+  install -Dt "$builddir/tools/objtool" tools/objtool/objtool
+  if [ -x tools/bpf/resolve_btfids/resolve_btfids ]; then
+    install -Dt "$builddir/tools/bpf/resolve_btfids" tools/bpf/resolve_btfids/resolve_btfids
+  fi
+
+  echo "Installing headers…"
+  cp -t "$builddir" -a include
+  cp -t "$builddir/arch/x86" -a arch/x86/include
+  install -Dt "$builddir/arch/x86/kernel" -m644 arch/x86/kernel/asm-offsets.s
+  install -Dt "$builddir/drivers/md" -m644 drivers/md/*.h
+  install -Dt "$builddir/net/mac80211" -m644 net/mac80211/*.h
+  install -Dt "$builddir/drivers/media/i2c" -m644 drivers/media/i2c/msp3400-driver.h
+  install -Dt "$builddir/drivers/media/usb/dvb-usb" -m644 drivers/media/usb/dvb-usb/*.h
+  install -Dt "$builddir/drivers/media/dvb-frontends" -m644 drivers/media/dvb-frontends/*.h
+  install -Dt "$builddir/drivers/media/tuners" -m644 drivers/media/tuners/*.h
+  install -Dt "$builddir/drivers/iio/common/hid-sensors" -m644 drivers/iio/common/hid-sensors/*.h
+
+  echo "Installing Kconfig files…"
+  find . -name 'Kconfig*' -exec install -Dm644 {} "$builddir/{}" \;
+
+  echo "Removing unneeded architectures…"
+  local a
+  for a in "$builddir"/arch/*/; do
+    [[ $a = */x86/ ]] && continue
+    rm -r "$a"
+  done
+
+  echo "Removing documentation, broken symlinks and loose objects…"
+  rm -rf "$builddir/Documentation"
+  find -L "$builddir" -type l -printf 'Removing %P\n' -delete
+  find "$builddir" -type f -name '*.o' -printf 'Removing %P\n' -delete
+
+  # MODULE_SIG (selected by LOCKDOWN_LSM) generates a throwaway signing key per
+  # build. Its PRIVATE half must never ship: anyone holding it could sign a
+  # module this kernel would accept even under lockdown=integrity.
+  rm -f "$builddir/certs/signing_key.pem"
+
+  echo "Adding symlink…"
+  mkdir -p "$pkgdir/usr/src"
+  ln -sr "$builddir" "$pkgdir/usr/src/$pkgbase"
+}
+
+for _p in "${pkgname[@]}"; do
+  eval "package_$_p() {
+    $(declare -f "_package${_p#$pkgbase}")
+    _package${_p#$pkgbase}
+  }"
+done

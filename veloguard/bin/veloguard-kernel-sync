@@ -16,7 +16,7 @@
 #                                        #   fragments against the CURRENT tree
 #   veloguard-kernel-sync --no-build     # fetch + checkout + config, skip compile
 #   veloguard-kernel-sync --dry-run      # print the plan, change nothing
-#   veloguard-kernel-sync --tag v7.1     # pin a tag instead of latest-stable
+#   veloguard-kernel-sync --tag v7.2.11  # pin a tag instead of latest-stable
 #   veloguard-kernel-sync --arch arm64   # target arm64 (default: x86_64)
 #   veloguard-kernel-sync --jobs N       # parallelism (default: nproc)
 #   veloguard-kernel-sync --skip-if-current   # no-op when already on the tag
@@ -99,9 +99,16 @@ if [ "$CHECK_ONLY" = 1 ]; then
 elif [ -n "$PIN_TAG" ]; then
   TARGET="$PIN_TAG"
 else
-  # Linus's tree carries vX.Y (mainline releases) + vX.Y-rcN. "Latest stable"
-  # = highest vX.Y with no -rc suffix.
-  TARGET="$(git tag --list 'v*' --sort=-v:refname | grep -vE '\-rc' | head -1)"
+  # Linus's tree carries only mainline vX.Y (+ -rcN); the point releases that
+  # carry every security backport (vX.Y.Z) live in the stable tree. If a
+  # `stable` remote is configured (git remote add stable
+  # https://github.com/gregkh/linux) its tags are fetched too, and the newest
+  # release of either kind wins: v7.2.11 sorts above v7.2.
+  if [ "$DO_FETCH" = 1 ] && git remote get-url stable >/dev/null 2>&1; then
+    if [ "$DRY" = 1 ]; then say "DRY: git fetch --tags stable"
+    else git fetch --tags stable || warn "stable remote fetch failed — mainline tags only"; fi
+  fi
+  TARGET="$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1)"
 fi
 [ -n "$TARGET" ] || die "could not determine a target tag"
 say "current: $FROM_DESC    target: $TARGET    arch: $ARCH    jobs: $JOBS    build-dir: $BUILD"
@@ -132,11 +139,24 @@ else
     || die "merge_config failed"
   make O="$BUILD" "${MAKEARCH[@]}" olddefconfig >/dev/null 2>&1 || die "olddefconfig failed"
   # Every requested CONFIG_ symbol must survive olddefconfig; unmet depends/select
-  # silently drop them, so diff requested-vs-resolved (per CLAUDE.md).
+  # silently drop them, so diff requested-vs-resolved. Same rules as CI's
+  # kernel/audit-config.sh: the LAST fragment to set a symbol wins, a requested
+  # =m that resolved to =y counts as kept, "# CONFIG_X is not set" is checked too.
+  declare -A WANT=(); ORDER=()
   for f in "${FRAGS[@]}"; do
     while IFS= read -r line; do
-      grep -qxF "$line" "$BUILD/.config" || DROPPED="$DROPPED ${line%%=*}"
-    done < <(grep -E '^CONFIG_[A-Za-z0-9_]+=' "$f")
+      if [[ $line =~ ^(CONFIG_[A-Za-z0-9_]+)=(.*)$ ]]; then sym="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
+      elif [[ $line =~ ^#\ (CONFIG_[A-Za-z0-9_]+)\ is\ not\ set$ ]]; then sym="${BASH_REMATCH[1]}"; val=n
+      else continue; fi
+      [ -n "${WANT[$sym]+x}" ] || ORDER+=("$sym")
+      WANT[$sym]="$val"
+    done < "$f"
+  done
+  for sym in "${ORDER[@]}"; do
+    got="$(sed -n "s/^${sym}=//p" "$BUILD/.config" | head -n1)"; got="${got:-n}"
+    [ "$got" = "${WANT[$sym]}" ] && continue
+    [ "${WANT[$sym]}" = m ] && [ "$got" = y ] && continue
+    DROPPED="$DROPPED $sym"
   done
   if [ -n "$DROPPED" ]; then warn "DROPPED/changed symbols:$DROPPED"
   else say "config OK — all requested symbols survived olddefconfig"; fi

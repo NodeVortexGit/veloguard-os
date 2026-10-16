@@ -6,9 +6,10 @@ The full source is fetched from kernel.org at build time; here we keep only:
 
 | File | What it is |
 |------|------------|
-| `BASE` | the upstream tag we're pinned to (e.g. `v7.0`). The agent bumps this. |
-| `PKGBUILD` | Arch recipe: upstream source + our config + our patches → `linux-veloguard` package |
-| `build-recipe.sh` | CI entry point: stages context, runs `makepkg`, emits the artifact + sha256 + manifest block |
+| `BASE` | the upstream release tag we're pinned to (e.g. `v7.2.11`). The agent bumps this. A point release `vX.Y.Z` is fetched from the stable tree (where every security backport lands); a bare `vX.Y` from torvalds/linux. |
+| `PKGBUILD` | Arch recipe: upstream source + our config + our patches → `linux-veloguard` + `linux-veloguard-headers` (DKMS: nvidia, broadcom-wl) |
+| `build-recipe.sh` | CI entry point: stages context, runs `makepkg`, emits both packages + sha256s + the manifest block |
+| `audit-config.sh` | fails the build if any requested `CONFIG_` symbol didn't survive `olddefconfig` (Kconfig drops unmet dependencies silently) |
 | `patches/*.patch` | our source patches on top of upstream (none yet — config-only so far) |
 
 The config fragments themselves live in `../veloguard/kernel/veloguardos-*.config`
@@ -23,7 +24,7 @@ Linus stable tag ─┐
 our patches+config┘                         │
                               [CI build-kernel.yml] makepkg in an Arch container
                                             │
-                          linux-veloguard-X.Y-1-x86_64.pkg.tar.zst → GitHub Release
+        linux-veloguard{,-headers}-X.Y.Z-1-x86_64.pkg.tar.zst → GitHub Release
                                             │
                               sign manifest.json (kernel version + sha256)   ← offline key
                                             │
@@ -40,7 +41,27 @@ our patches+config┘                         │
 ## Bump the kernel by hand (what the agent automates)
 
 ```bash
-echo v7.1 > kernel/BASE          # pin a newer upstream stable tag
+echo v7.2.12 > kernel/BASE       # pin a newer upstream stable tag
 # (add/refresh kernel/patches/*.patch if our deltas need rebasing)
-git commit -am "kernel: bump to v7.1"   # CI builds + publishes; then sign the manifest
+git commit -am "kernel: bump to v7.2.12"   # CI builds; publish both packages, then sign the manifest
 ```
+
+## Why the config looks the way it does
+
+`x86_64_defconfig` is a *build-test* config, not a distro config. On Arch
+userspace a kernel built from it (plus feature fragments) compiles and boots to
+a shell, then fails in ways that look like "the kernel is broken":
+
+- **no firmware loads** — Arch ships every blob `.zst`-compressed; without
+  `FW_LOADER_COMPRESS_ZSTD` there is no Wi-Fi, Bluetooth, amdgpu, GuC/HuC, SOF;
+- **no root disk** on Intel RST/VMD laptops (`VMD`);
+- **no touchpad** — I2C-HID needs the DesignWare I2C controller, LPSS and the
+  GPIO/pinctrl subsystem, none of which defconfig enables;
+- **`wg-quick` full-tunnel aborts** — needs `NFT_FIB_*`, `NF_CONNTRACK_MARK`,
+  `IPV6_MULTIPLE_TABLES`;
+- **black screen until a GPU module loads** — `SIMPLEDRM` needs `SYSFB_SIMPLEFB`.
+
+The fragments now cover these, and `audit-config.sh` runs inside `prepare()`
+so a fragment line that Kconfig quietly drops fails CI instead of shipping.
+The kernel identifies itself as `X.Y.Z-veloguard` (`uname -r`), and its
+modules live in their own `/usr/lib/modules/X.Y.Z-veloguard`.
