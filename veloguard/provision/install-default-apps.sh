@@ -20,7 +20,11 @@ priv() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 # Run a command as the real desktop user (defaults are per-user, not root).
-USER_NAME="${SUDO_USER:-$USER}"
+# Under the installer (root, in the target chroot) there is no SUDO_USER —
+# use the account Calamares just created, not root.
+USER_NAME="${SUDO_USER:-}"
+[ -n "$USER_NAME" ] || USER_NAME="$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}')"
+USER_NAME="${USER_NAME:-$USER}"
 as_user() { sudo -u "$USER_NAME" env XDG_RUNTIME_DIR="/run/user/$(id -u "$USER_NAME")" "$@"; }
 
 # --- 1. Flatpak + Flathub --------------------------------------------------

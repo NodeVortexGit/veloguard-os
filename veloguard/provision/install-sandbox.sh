@@ -29,10 +29,13 @@ if [ "${1:-}" = "--gvisor" ] || [ "${1:-}" = "--all" ]; then
   say "installing gVisor (runsc) for the 'strong' tier…"
   arch="$(uname -m)"
   url="https://storage.googleapis.com/gvisor/releases/release/latest/${arch}"
-  if ( cd /tmp && curl -fsSL "${url}/runsc" -o runsc \
+  # Private temp dir: a fixed /tmp/runsc could be swapped by another local
+  # user between the checksum and the root-owned install below.
+  dl="$(mktemp -d)"; trap 'rm -rf "$dl"' EXIT
+  if ( cd "$dl" && curl -fsSL "${url}/runsc" -o runsc \
         && curl -fsSL "${url}/runsc.sha512" -o runsc.sha512 \
-        && sha512sum -c runsc.sha512 && chmod +x runsc \
-        && priv mv runsc /usr/local/bin/ ); then
+        && sha512sum -c runsc.sha512 \
+        && priv install -m755 -o root -g root runsc /usr/local/bin/runsc ); then
     say "gVisor installed (strong tier)"
   else
     warn "gVisor install failed — strong tier will keep degrading to light"

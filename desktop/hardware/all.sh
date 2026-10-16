@@ -14,8 +14,12 @@ LOG="${VELOGUARD_HW_LOG:-/var/log/veloguard-hardware.log}"
 # Load + export the shared helpers so child scripts can call them.
 # shellcheck source=/dev/null
 . "$HW_DIR/lib.sh"
-export -f vg_pkg_add vg_hw_nvidia_gsp vg_hw_nvidia_without_gsp
-export VELOGUARD_HW_USER="${VELOGUARD_HW_USER:-${SUDO_USER:-veloguard}}"
+export -f vg_pkg_add vg_kernel_headers vg_multilib_enabled \
+          vg_hw_nvidia_gsp vg_hw_nvidia_without_gsp
+# The desktop user: sudo's caller, else the first human account (the installed
+# system's user is named in the installer — "veloguard" is only the live user).
+_first_user="$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}')"
+export VELOGUARD_HW_USER="${VELOGUARD_HW_USER:-${SUDO_USER:-${_first_user:-veloguard}}}"
 
 log() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LOG" ; }
 
@@ -35,6 +39,19 @@ main() {
   [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo veloguard-hardware" >&2; exit 1; }
   mkdir -p "$(dirname "$LOG")"
   log "VeloGuardOS hardware setup starting"
+
+  # Drivers come from the network. Offline (first boot with no Wi-Fi yet,
+  # or the Wi-Fi driver is exactly what's missing) → exit non-zero so the
+  # unit does NOT mark itself done and retries next boot. It used to run,
+  # fail every install, and stamp .hardware-done anyway — forever.
+  # A FULL -Syu, never a bare -Sy: -Sy + -S <pkg> is a partial upgrade (new
+  # packages against old libraries), and DKMS needs headers matching the
+  # kernel that's actually installed — the ISO-era versions are long gone
+  # from the mirrors.
+  if ! pacman -Syu --noconfirm >>"$LOG" 2>&1; then
+    log "system sync/upgrade failed (offline?) — will retry on next boot"
+    exit 75
+  fi
 
   # Broadly-applicable driver/hardware scripts (order matters: network first).
   run_logged "$HW_DIR/network.sh"

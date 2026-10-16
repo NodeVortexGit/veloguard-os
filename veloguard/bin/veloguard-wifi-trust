@@ -20,10 +20,15 @@ LIST="$VELOGUARD_STATE/trusted-ssids"
 VPN=/usr/local/bin/veloguard-vpn      # absolute: pkexec's PATH omits /usr/local/bin
 mkdir -p "$VELOGUARD_STATE" 2>/dev/null || true
 
-# current active Wi-Fi (same parse the netwatch dispatcher uses)
-line="$(nmcli -t -f ACTIVE,SSID,SECURITY dev wifi 2>/dev/null | awk -F: '$1=="yes"{print; exit}')"
-ssid="$(printf '%s' "$line" | cut -d: -f2)"
-sec="$(printf '%s'  "$line" | cut -d: -f3)"
+# current active Wi-Fi (same parse as veloguard-netwatch)
+# Active Wi-Fi line: ACTIVE:SECURITY:SSID. SSID goes LAST and is unescaped:
+# `nmcli -t` writes a literal ':' in an SSID as '\:' (and '\' as '\\'), so
+# splitting on ':' mis-parsed e.g. "Cafe:Guest" — and SSIDs are chosen by
+# whoever runs the access point. SECURITY never contains ':'.
+line="$(nmcli -t -f ACTIVE,SECURITY,SSID dev wifi 2>/dev/null | awk -F: '$1=="yes"{print; exit}')"
+rest="${line#yes:}"
+sec="${rest%%:*}"
+ssid="$(printf '%s' "${rest#*:}" | sed -e 's/\\\(.\)/\1/g')"
 [ -n "$ssid" ] || { echo "no-wifi"; exit 0; }
 
 # write to the guard's trust DB (netclass/netwatch read this). SSID via env →
@@ -40,7 +45,13 @@ PY
 }
 
 # maintain the world-readable mirror the GUI reads
-list_del() { [ -f "$LIST" ] && grep -vxF "$ssid" "$LIST" > "$LIST.tmp" 2>/dev/null && mv "$LIST.tmp" "$LIST" || true; }
+# `--`: an SSID like "-f/etc/shadow" must be a pattern, not a grep option.
+# grep exits 1 when the result is empty (last SSID removed) — still replace.
+list_del() {
+  [ -f "$LIST" ] || return 0
+  grep -vxF -- "$ssid" "$LIST" > "$LIST.tmp" 2>/dev/null
+  [ $? -le 1 ] && mv "$LIST.tmp" "$LIST" || rm -f "$LIST.tmp"
+}
 list_add() { list_del; printf '%s\n' "$ssid" >> "$LIST"; }
 
 case "${1:-status}" in

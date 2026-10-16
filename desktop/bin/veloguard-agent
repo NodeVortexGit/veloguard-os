@@ -64,6 +64,12 @@ if [ -z "$brain" ]; then
     exit 1
   fi
 fi
+# The brain name is spliced into a `bash -lc` command string below — only
+# accept the two real values, whatever the file contains.
+case "$brain" in
+  claude|ollama) ;;
+  *) echo "unknown agent brain '$brain' — run: veloguard-agent set claude|ollama" >&2; exit 2 ;;
+esac
 vg use "$brain" >/dev/null 2>&1 || true
 
 goal="${*:-}"

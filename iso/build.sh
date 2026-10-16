@@ -151,6 +151,17 @@ done
 # there's no real WWAN here, so masking it is pure win for Wi-Fi stability.
 ln -sf /usr/lib/systemd/system/NetworkManager-wait-online.service \
   "$PROFILE/airootfs/etc/systemd/system/network-online.target.wants/NetworkManager-wait-online.service"
+# Wi-Fi auto-protect: the NM dispatcher hook runs veloguard-netwatch on every
+# Wi-Fi "up" (open/untrusted → VPN). It was never installed, so the feature
+# never ran. NM only runs root-owned, non-world-writable hooks (mode set in
+# file_permissions below), and its dispatcher is D-Bus-activated through the
+# dbus-org alias that exists only once the unit is enabled.
+install -Dm755 "$REPO/veloguard/provision/veloguard-nm-dispatcher" \
+  "$PROFILE/airootfs/etc/NetworkManager/dispatcher.d/90-veloguard"
+ln -sf /usr/lib/systemd/system/NetworkManager-dispatcher.service \
+  "$PROFILE/airootfs/etc/systemd/system/dbus-org.freedesktop.nm-dispatcher.service"
+printf 'file_permissions+=(["/etc/NetworkManager/dispatcher.d/90-veloguard"]="0:0:755")\n' \
+  >> "$PROFILE/profiledef.sh"
 # Bluetooth: enable the service (and dbus-activated for GNOME's BT panel).
 ln -sf /usr/lib/systemd/system/bluetooth.service \
   "$PROFILE/airootfs/etc/systemd/system/bluetooth.target.wants/bluetooth.service"

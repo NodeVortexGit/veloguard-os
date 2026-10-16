@@ -19,9 +19,13 @@ TRUSTED_LIST="${VELOGUARD_TRUSTED_LIST:-/var/lib/veloguard/trusted-ssids}"
 menu() { wofi --dmenu --width 380 --height 320 -p "$1"; }
 note() { notify-send "VeloGuard" "$1"; }
 
+# Current SSID, unescaped: `nmcli -t` writes ':' inside an SSID as '\:' and
+# '\' as '\\'. The trusted-ssids list stores the real SSID (veloguard-wifi-trust
+# unescapes the same way), so an escaped compare never matched e.g. "Cafe:Guest".
 current_ssid() {
   nmcli -t -f active,ssid dev wifi 2>/dev/null \
-    | awk -F: '$1=="yes"{print substr($0,5); exit}'
+    | awk -F: '$1=="yes"{print substr($0,5); exit}' \
+    | sed -e 's/\\\(.\)/\1/g'
 }
 
 vpn_menu() {
@@ -63,7 +67,7 @@ trust_toggle() {
   local ssid; ssid="$(current_ssid)"
   if [ -z "$ssid" ]; then note "Not on Wi-Fi"; return 0; fi
   local action="trust" r
-  if [ -r "$TRUSTED_LIST" ] && grep -Fxq "$ssid" "$TRUSTED_LIST" 2>/dev/null; then
+  if [ -r "$TRUSTED_LIST" ] && grep -Fxq -- "$ssid" "$TRUSTED_LIST" 2>/dev/null; then
     action="untrust"
   fi
   r="$(pkexec "$WIFI_TRUST" "$action" 2>/dev/null || true)"
@@ -78,7 +82,7 @@ trust_toggle() {
 top_menu() {
   local ssid trust_label choice
   ssid="$(current_ssid)"
-  if [ -n "$ssid" ] && [ -r "$TRUSTED_LIST" ] && grep -Fxq "$ssid" "$TRUSTED_LIST" 2>/dev/null; then
+  if [ -n "$ssid" ] && [ -r "$TRUSTED_LIST" ] && grep -Fxq -- "$ssid" "$TRUSTED_LIST" 2>/dev/null; then
     trust_label="Untrust this Wi-Fi ($ssid)"
   elif [ -n "$ssid" ]; then
     trust_label="Trust this Wi-Fi ($ssid)"

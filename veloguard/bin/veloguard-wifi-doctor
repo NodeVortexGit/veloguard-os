@@ -5,12 +5,16 @@
 #   veloguard-wifi-doctor              # read-only: collect evidence + diagnose
 #   sudo veloguard-wifi-doctor --fix   # also apply the standard remediations
 #
-# Always writes the full evidence to /tmp/veloguard-wifi-report.txt — attach
+# Always writes the full evidence to ~/veloguard-wifi-report.txt (root:
+# /var/log/veloguard-wifi-report.txt) — attach
 # that file when asking for help. Checks are generic; the hints are tuned to
 # the hardware we ship on (Realtek rtw88).
 set -uo pipefail
 FIX=0; [ "${1:-}" = "--fix" ] && FIX=1
-R=/tmp/veloguard-wifi-report.txt
+# Never a fixed name in /tmp when we may be root (`sudo … --fix`): another
+# user could pre-plant it. Root writes under /var/log, users under $HOME.
+if [ "$(id -u)" = 0 ]; then R=/var/log/veloguard-wifi-report.txt
+else R="${HOME:-/tmp}/veloguard-wifi-report.txt"; fi
 : > "$R" 2>/dev/null || R=/dev/null
 log() { printf '%s\n' "$*" | tee -a "$R"; }
 sec() { printf '\n===== %s =====\n' "$*" | tee -a "$R"; }

@@ -22,14 +22,21 @@ if command -v ip >/dev/null 2>&1; then
 fi
 
 # --- Wi-Fi: current SSID + trusted? -----------------------------------------
+# Current SSID, unescaped: `nmcli -t` writes ':' inside an SSID as '\:' and
+# '\' as '\\'. The trusted-ssids list stores the real SSID (veloguard-wifi-trust
+# unescapes the same way), so an escaped compare never matched e.g. "Cafe:Guest".
+current_ssid() {
+  nmcli -t -f active,ssid dev wifi 2>/dev/null \
+    | awk -F: '$1=="yes"{print substr($0,5); exit}' \
+    | sed -e 's/\\\(.\)/\1/g'
+}
 ssid=""
 if command -v nmcli >/dev/null 2>&1; then
-  ssid="$(nmcli -t -f active,ssid dev wifi 2>/dev/null \
-    | awk -F: '$1=="yes"{print substr($0,5); exit}')"
+  ssid="$(current_ssid)"
 fi
 trusted="unknown"
 if [ -n "$ssid" ]; then
-  if [ -r "$TRUSTED_LIST" ] && grep -Fxq "$ssid" "$TRUSTED_LIST" 2>/dev/null; then
+  if [ -r "$TRUSTED_LIST" ] && grep -Fxq -- "$ssid" "$TRUSTED_LIST" 2>/dev/null; then
     trusted="yes"
   else
     trusted="no"
@@ -60,7 +67,7 @@ else
   update_line="Update: none staged"
 fi
 
-tooltip="🛡 VeloGuard\n${vpn_line}\n${wifi_line}\n${update_line}\n\nClick: guard menu  ·  Right-click: VPN"
+tooltip="🛡 VeloGuard"$'\n'"${vpn_line}"$'\n'"${wifi_line}"$'\n'"${update_line}"$'\n\n'"Click: guard menu  ·  Right-click: VPN"
 
 # --- Decide primary class + text (priority order) ---------------------------
 # untrusted-Wi-Fi-without-VPN is the loudest state, then staged update, then VPN.
@@ -75,5 +82,15 @@ else
   cls="ok"
 fi
 
-# --- Emit JSON (escape backslash newlines for Waybar tooltip) ---------------
-printf '{"text":"%s","tooltip":"%s","class":"%s"}\n' "$text" "$tooltip" "$cls"
+# --- Emit JSON ---------------------------------------------------------------
+# Every string is JSON-escaped: the tooltip carries the SSID, which whoever runs
+# the access point chooses. Raw, a '"' broke the module and a crafted name could
+# inject its own "text"/"class" fields — spoofing the guard's own indicator.
+json_esc() {
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"; s="${s//$'\n'/\\n}"; s="${s//$'\r'/}"
+  printf '%s' "$s" | tr -d '\000-\010\013\014\016-\037'
+}
+printf '{"text":"%s","tooltip":"%s","class":"%s"}\n' \
+  "$(json_esc "$text")" "$(json_esc "$tooltip")" "$(json_esc "$cls")"
