@@ -32,7 +32,10 @@ sed -i 's/Arch Linux/VeloGuardOS/g' "$PROFILE"/efiboot/loader/entries/*.conf 2>/
 #     fragility), so it's deferred. Post-boot one-liner to add it:
 #       git clone https://aur.archlinux.org/yay.git && (cd yay && makepkg -si)
 
-# 3. extra packages (appended to releng's base list)
+# 3. extra packages (appended to releng's base list). Calamares is the ONE
+#    installer: releng's archinstall goes (the "advanced, terminal" launcher
+#    that ran it is gone too).
+sed -i '/^archinstall$/d' "$PROFILE/packages.x86_64"
 cat "$REPO/iso/packages.extra" >> "$PROFILE/packages.x86_64"
 
 # 3a. the Omarchy-style Hyprland desktop stack (single source of truth). Strip
@@ -48,7 +51,10 @@ if ls "$REPO/iso/pkgs/"*.pkg.tar.zst >/dev/null 2>&1; then
   printf 'calamares\nckbcomp\n' >> "$PROFILE/packages.x86_64"
   echo "  local repo: $(ls "$REPO/iso/pkgs/"*.pkg.tar.zst | xargs -n1 basename | tr '\n' ' ')"
 else
-  echo "  (no iso/pkgs packages — GUI installer will be MISSING from this image)"
+  # With archinstall gone, an image without Calamares can't install at all —
+  # fail the build instead of shipping one.
+  echo "ERROR: no iso/pkgs/*.pkg.tar.zst — the installer (calamares) would be missing" >&2
+  exit 1
 fi
 
 # 4. our tree into the live root
@@ -181,8 +187,15 @@ install -Dm644 "$REPO/veloguard/provision/veloguard-privacy.timer" \
   "$PROFILE/airootfs/etc/systemd/system/veloguard-privacy.timer"
 ln -sf /etc/systemd/system/veloguard-privacy.timer \
   "$PROFILE/airootfs/etc/systemd/system/timers.target.wants/veloguard-privacy.timer"
-# Hardware/driver setup (Omarchy-derived) — runs ONCE on first boot to install
-# the drivers this machine actually needs (GPU/Wi-Fi/touchpad/…).
+# Live-boot hardware probe → hw.js for the installer's Desktop page (detected
+# hardware, Clean Config pre-selected on laptops). Also on PATH for humans.
+install -Dm644 "$REPO/veloguard/provision/veloguard-hwprobe.service" \
+  "$PROFILE/airootfs/etc/systemd/system/veloguard-hwprobe.service"
+ln -sf /etc/systemd/system/veloguard-hwprobe.service \
+  "$PROFILE/airootfs/etc/systemd/system/multi-user.target.wants/veloguard-hwprobe.service"
+ln -sf /opt/veloguard/provision/veloguard-hwprobe "$PROFILE/airootfs/usr/local/bin/veloguard-hwprobe"
+# Hardware/driver setup (Omarchy-derived) — the installer runs it into the
+# target; this unit is the first-boot retry when the install was offline.
 install -Dm644 "$REPO/veloguard/provision/veloguard-hardware.service" \
   "$PROFILE/airootfs/etc/systemd/system/veloguard-hardware.service"
 ln -sf /etc/systemd/system/veloguard-hardware.service \

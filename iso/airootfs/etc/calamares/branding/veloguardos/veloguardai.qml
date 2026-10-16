@@ -3,18 +3,22 @@
  * or "Local host" → choose an Ollama model to install. Choices are written to
  * Calamares global storage and applied by the veloguardaijob module.
  *
- * NOTE: first cut — the Calamares QML/global-storage API is version-specific
- * (3.3 / Qt6). This needs a boot test of the live ISO to validate + tune.
+ * Loaded by notesqml@veloguardai from the branding directory (Calamares 3.3+
+ * has no "qmlmodule" interface — the old module.desc made Calamares refuse to
+ * start once the page was enabled). Global Storage is `Global` from
+ * io.calamares.core: insert()/value() — there is no setValue(), so every
+ * choice used to vanish into the try/catch.
  */
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import io.calamares.core 1.0
 
 Item {
     id: page
     width: 800; height: 480
 
-    function gset(k, v) { try { Global.setValue(k, v) } catch (e) {} }
+    function gset(k, v) { Global.insert(k, v) }
 
     StackLayout {
         id: stack
@@ -57,7 +61,7 @@ Item {
             TextField {
                 id: model
                 Layout.fillWidth: true
-                placeholderText: provider.currentIndex === 1 ? "claude-haiku-4-5" : "gpt-4o-mini"
+                placeholderText: provider.currentIndex === 1 ? "claude-sonnet-5 (the guard's default)" : "gpt-4o-mini"
                 onTextChanged: gset("veloguard_ai_model", text)
             }
 

@@ -1,5 +1,6 @@
 # VeloGuardOS — packages appended to archiso 'releng' base (base/linux/syslinux/
-# networking/archinstall already come from releng). Keep it lean ("like Arch").
+# networking already come from releng; build.sh drops releng's archinstall —
+# Calamares is the installer). Keep it lean ("like Arch").
 
 # networking for the desktop
 networkmanager
@@ -65,13 +66,12 @@ usb_modeswitch
 # GUI dialogs: the restart-update prompt + the VPN "Import config…" flow
 zenity
 
-# every distro should have git; base-devel + git = AUR works manually, and
-# build.sh also bakes in the 'yay' AUR helper from a local repo.
+# every distro should have git; base-devel + git = AUR works manually (no
+# helper is baked in — see build.sh step 2.5).
 git
 base-devel
 go
 
-# NOTE: Calamares (GUI installer) is staged in iso/airootfs/etc/calamares but not
-# installed yet — it isn't in Arch's repos and the Chaotic-AUR pull was flaky.
-# The live ISO uses archinstall for now; Calamares needs an AUR makepkg build.
+# Calamares (the installer) + ckbcomp come from the pinned local repo in
+# iso/pkgs (built once from AUR); build.sh adds them and fails without them.
 

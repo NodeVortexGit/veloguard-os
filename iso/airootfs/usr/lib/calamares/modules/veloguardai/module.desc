@@ -1,5 +1,0 @@
----
-type:       "view"
-name:       "veloguardai"
-interface:  "qmlmodule"
-requiredModules: []

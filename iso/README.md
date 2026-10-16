@@ -18,9 +18,16 @@ USB stick and it runs live, with an "Install to Disk" option. Built by
 - **Updater baked in**: `veloguard-update.timer` is enabled (signed, fail-closed;
   stays quiet until you add your release key — see `veloguard/keys/SIGNING.md`).
 - Bulgarian Mode assets at `/opt/Bulgarian_Mode` + its launcher. 🇧🇬
-- **Install to Disk** launcher → `archinstall` (guided). The live session *is*
-  VeloGuardOS; a VeloGuardOS-aware graphical installer (Calamares with our
-  modules) is the next polish.
+- **Install VeloGuardOS** launcher → **Calamares**, the one installer
+  (archinstall is gone). Beyond the stock pages it adds a **Desktop** page —
+  Clean Config (Hyprland rice, pre-selected on laptops), VeloGuard Hyprland,
+  GNOME, Xfce, niri, i3, COSMIC — and during installation it probes every
+  component (`veloguard-hwprobe`) and installs its drivers: NVIDIA (open/
+  legacy, DKMS for every kernel), Vulkan, VA-API, Broadcom `wl`, Bluetooth,
+  and on laptops power-profiles/thermald/sensors/fingerprint/Thunderbolt and
+  NVIDIA PRIME power management. Offline installs still work: VeloGuard
+  Hyprland is on the disc, and the drivers + chosen desktop finish on the
+  first online boot (`veloguard-hardware.service`).
 
 ## Build it
 
