@@ -96,19 +96,26 @@ check_wg_conf() {  # $1 = config file; prints the reason (never file content) on
 }
 
 set_default() {  # point veloguard.conf (the guard's default) at <name>'s config
-  local name="$1"
+  local name="$1" keep n k
   valid_name "$name"
-  priv rm -f "$DEFAULT_APP"            # a WireGuard default replaces an app default
+  # Connecting the default itself ("veloguard" — also the fallback when the
+  # default app can't connect) changes nothing about which default is chosen.
   [ "$name" = veloguard ] && return 0
   if ! priv test -f "$WG/$name.conf"; then
     warn "no config for '$name' — import one first"; return 1
   fi
+  priv rm -f "$DEFAULT_APP"            # a named WireGuard profile becomes the default
   if priv test -f "$WG/veloguard.conf" && ! priv test -L "$WG/veloguard.conf"; then
-    # a real imported file occupies the default slot — preserve it
-    priv mv "$WG/veloguard.conf" "$WG/veloguard-imported.conf"
-    say "previous default preserved as veloguard-imported.conf"
+    # A real imported file occupies the default slot — preserve it under a
+    # name wg-quick accepts (≤15 chars; "veloguard-imported" was 18, so the
+    # preserved profile could never be connected again).
+    n=vg-imported; k=1
+    while priv test -e "$WG/$n.conf"; do n="vg-imported$k"; k=$((k + 1)); done
+    priv mv "$WG/veloguard.conf" "$WG/$n.conf"
+    say "previous default preserved as '$n' (veloguard-vpn connect $n)"
   fi
-  priv ln -sfn "$WG/$name.conf" "$WG/veloguard.conf"
+  keep="$WG/$name.conf"
+  priv ln -sfn "$keep" "$WG/veloguard.conf"
   say "default profile → $name"
 }
 
@@ -122,16 +129,26 @@ default_app() {  # the app that is the default (set by the last app connect)
   is_app "$a" && echo "$a"
 }
 
-app_default() {  # make <app> the default: "connect" / auto-protect now use it
+app_default() {  # make <app> the default: "connect" / auto-protect try it first
+  # The WireGuard default (veloguard.conf) is LEFT IN PLACE as the fallback:
+  # an app can only connect inside someone's desktop session, so at boot —
+  # before anyone logs in — auto-protect still has the tunnel it always had.
   priv install -d -m755 "$(dirname "$DEFAULT_APP")"
-  if priv test -L "$WG/veloguard.conf"; then
-    priv rm -f "$WG/veloguard.conf"
-  elif priv test -f "$WG/veloguard.conf"; then
-    priv mv "$WG/veloguard.conf" "$WG/veloguard-imported.conf"
-    say "previous default preserved as veloguard-imported.conf"
-  fi
   printf '%s\n' "$1" | priv tee "$DEFAULT_APP" >/dev/null
 }
+
+# Take down every wg-quick tunnel (one tunnel at a time); prints their names
+# so a failed app connect can bring them back. NM-managed WireGuard (a
+# provider app's own interface) has no config here and is left to the app.
+wg_down_all() {
+  local i
+  for i in $(priv wg show interfaces 2>/dev/null); do
+    priv test -f "$WG/$i.conf" || continue
+    priv wg-quick down "$i" >/dev/null 2>&1 && echo "$i"
+  done
+  return 0
+}
+wg_restore() { local i; for i in $1; do priv wg-quick up "$i" >/dev/null 2>&1 || true; done; }
 
 # The person whose app (and app sign-in) this is: pkexec's or sudo's caller,
 # the invoking user, or — when root runs us with no caller (the NM dispatcher's
@@ -181,7 +198,7 @@ surfshark_active() {
 }
 
 app_connect() {  # $1 = provider; exits with the codes documented at the top
-  local p="$1" label u out rc=0
+  local p="$1" label u out rc=0 downed=""
   label="$(app_label "$p")"
   if ! u="$(session_user)"; then
     warn "$label: no one is signed in to a desktop session, so its app can't be used"; exit 5
@@ -202,10 +219,12 @@ app_connect() {  # $1 = provider; exits with the codes documented at the top
       if [[ $out == *"Status: Connected"* ]]; then
         app_default proton; say "already connected: $label"; return 0
       fi
+      downed="$(wg_down_all)"
       out="$(as_user "$u" protonvpn connect 2>&1)" || rc=$?
       if [ "$rc" -eq 0 ] && [[ $out == *"Connected to"* ]]; then
         app_default proton; say "connected: $label — ${out%%$'\n'*}"; return 0
       fi
+      wg_restore "$downed"
       if [[ $out == *"Authentication required"* || $out == *"sign in"* ]]; then
         warn "$label: not signed in — open the app once and sign in"; exit 5
       fi
@@ -222,10 +241,12 @@ app_connect() {  # $1 = provider; exits with the codes documented at the top
       if [[ ${out,,} == *"not logged in"* ]]; then
         warn "$label: not signed in — run: nordvpn login"; exit 5
       fi
+      downed="$(wg_down_all)"
       out="$(as_user "$u" nordvpn connect 2>&1)" || rc=$?
       if [ "$rc" -eq 0 ] && [[ $out == *"connected"* ]]; then
         app_default nord; say "connected: $label"; return 0
       fi
+      wg_restore "$downed"
       warn "$label: connect failed: $(tail -n1 <<<"$out")"; exit 1 ;;
     surfshark)
       if [ -n "$(surfshark_active)" ]; then
@@ -243,7 +264,16 @@ app_disconnect_all() {  # every provider app's connection; prints the ones it do
   u="$(session_user 2>/dev/null)" || u=""
   if [ -n "$u" ] && command -v protonvpn >/dev/null 2>&1; then
     out="$(as_user "$u" protonvpn status 2>&1)" || true
-    [[ $out == *"Status: Connected"* ]] && as_user "$u" protonvpn disconnect >/dev/null 2>&1 && echo proton
+    if [[ $out == *"desktop app is currently running"* ]]; then
+      # The CLI won't run beside the GUI — end the GUI's tunnel through
+      # NetworkManager (Proton's connections are named after it).
+      while IFS= read -r c; do
+        [ -n "$c" ] && priv nmcli connection down id "$c" >/dev/null 2>&1 && echo proton
+      done < <(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null \
+                 | awk -F: 'tolower($1) ~ /proton/ && $NF ~ /^(vpn|wireguard)$/ {print $1}')
+    elif [[ $out == *"Status: Connected"* ]]; then
+      as_user "$u" protonvpn disconnect >/dev/null 2>&1 && echo proton
+    fi
   fi
   if [ -n "$u" ] && command -v nordvpn >/dev/null 2>&1; then
     out="$(as_user "$u" nordvpn status 2>&1)" || true
@@ -272,7 +302,9 @@ app_cmd() {  # veloguard-vpn app <provider> install|open|installed
         nord)       # only on the AUR (a repack of Nord's official .deb) — built
                     # as you, never as root, with your sudo for the install
           [ "$(id -u)" -ne 0 ] || { warn "run this as your desktop user, not root: veloguard-vpn app nord install"; exit 1; }
-          t="$(mktemp -d)"; trap 'rm -rf "$t"' EXIT
+          t="$(mktemp -d)"
+          # shellcheck disable=SC2064  # expand NOW: $t is local, gone when EXIT fires
+          trap "rm -rf -- '$t'" EXIT
           git clone --depth 1 https://aur.archlinux.org/nordvpn-bin.git "$t/nordvpn-bin"
           say "review the PKGBUILD before it builds: $t/nordvpn-bin/PKGBUILD"
           ( cd "$t/nordvpn-bin" && makepkg -si --needed )
@@ -302,7 +334,9 @@ wg_connect() {
     warn "$name.conf has no Endpoint — bringing it up would black-hole all routing; refusing"
     exit 3
   fi
-  # one tunnel at a time: tear down anything active first
+  # one tunnel at a time: tear down anything active first — wg-quick tunnels
+  # and a provider app's connection alike
+  app_disconnect_all >/dev/null
   for i in $(priv wg show interfaces 2>/dev/null); do
     priv wg-quick down "$i" >/dev/null 2>&1 || true
   done
@@ -347,10 +381,20 @@ case "$cmd" in
   connect)
     name="${1:-veloguard}"
     valid_name "$name"
-    if priv test -f "$WG/$name.conf"; then
+    if [ "$name" = veloguard ] && app="$(default_app)"; then
+      # The default is a provider app (it was used last). If it can't connect
+      # — nobody logged in yet, not signed in, its GUI open — the WireGuard
+      # default, when there is one, still protects.
+      rc=0; ( app_connect "$app" ) || rc=$?
+      [ "$rc" -eq 0 ] && exit 0
+      if priv test -f "$WG/veloguard.conf"; then
+        say "the $(app_label "$app") app couldn't connect (code $rc) — using the WireGuard default"
+        wg_connect veloguard
+      else
+        exit "$rc"
+      fi
+    elif priv test -f "$WG/$name.conf"; then
       wg_connect "$name"                          # a WireGuard profile always wins
-    elif [ "$name" = veloguard ] && app="$(default_app)"; then
-      app_connect "$app"                          # the default is a provider app
     elif is_app "$name"; then
       app_connect "$name"
     else

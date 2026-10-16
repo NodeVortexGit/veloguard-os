@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#
+# veloguard-vpn-autoprotect — the login half of Wi-Fi auto-protect when the
+# default VPN is a provider APP (Proton / Nord / Surfshark). At boot the
+# NetworkManager hook protects an untrusted Wi-Fi before anyone logs in — but
+# an app, signed in per user, can only connect inside a desktop session. So
+# the same "connect the default" runs once more here, at login.
+#
+# Does nothing unless: the default is an app, we're on Wi-Fi, that Wi-Fi is
+# not trusted, and no VPN is up yet. Started from the Hyprland autostart and
+# /etc/xdg/autostart (GNOME, Xfce, COSMIC…).
+set -u
+APPFILE=/etc/veloguard/vpn-default-app
+TRUSTED="${VELOGUARD_TRUSTED_LIST:-/var/lib/veloguard/trusted-ssids}"
+VPN=/usr/local/bin/veloguard-vpn
+
+[ -s "$APPFILE" ] || exit 0
+id -nG | grep -qw wheel || exit 0            # the passwordless polkit rule is wheel-only
+sleep 10                                     # let NetworkManager + the session bus settle
+
+ssid="$(nmcli -t -f active,ssid dev wifi 2>/dev/null \
+  | awk -F: '$1=="yes"{print substr($0,5); exit}' | sed -e 's/\\\(.\)/\1/g')"
+[ -n "$ssid" ] || exit 0
+if [ -r "$TRUSTED" ] && grep -Fxq -- "$ssid" "$TRUSTED"; then exit 0; fi
+if ip -br link show type wireguard 2>/dev/null | grep -q .; then exit 0; fi
+if nmcli -t -f TYPE connection show --active 2>/dev/null | grep -qxE 'vpn|wireguard'; then exit 0; fi
+
+if pkexec "$VPN" connect veloguard >/dev/null 2>&1; then
+  notify-send "VeloGuard VPN" "Untrusted Wi-Fi ($ssid) — protected through your VPN app" 2>/dev/null || true
+else
+  notify-send -u critical "VeloGuard VPN" "Untrusted Wi-Fi ($ssid) and your VPN app couldn't connect — VPN… in the guard menu" 2>/dev/null || true
+fi

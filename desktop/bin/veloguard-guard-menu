@@ -81,7 +81,10 @@ vpn_offer_app() {  # no app, no WireGuard config: install the official app?
         local t; t="$(command -v alacritty || command -v foot || command -v kitty || command -v xterm || true)"
         [ -n "$t" ] || { note "No terminal found — run: veloguard-vpn app nord install"; return 0; }
         "$t" -e bash -c "$VPN app nord install; read -rp 'Press Enter to close…' _" || true
-        "$VPN" app nord installed && "$VPN" app nord open
+        # Not `app nord open` right away: this session doesn't have the new
+        # nordvpn group yet, so `nordvpn login` would hit "permission denied".
+        "$VPN" app nord installed \
+          && note "NordVPN installed — log out and back in once, then VPN ▸ Connect: NordVPN signs you in"
         return 0
       fi
       note "Installing the $label app…"

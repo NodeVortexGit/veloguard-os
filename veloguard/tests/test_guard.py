@@ -200,6 +200,46 @@ class VpnHelperApps(unittest.TestCase):
         self.stub("nmcli", 'echo "Surfshark WireGuard:wireguard"')
         self.assertEqual(self.run_vpn("connect", "surfshark").returncode, 0)
 
+    def wg_setup(self, *names, up=""):
+        """WireGuard profiles in the temp WG dir + stub wg/wg-quick/timeout."""
+        conf = "[Interface]\nPrivateKey = x\n[Peer]\nPublicKey = y\nEndpoint = 203.0.113.1:51820\nAllowedIPs = 0.0.0.0/0\n"
+        for n in names:
+            (self.d / "wireguard" / f"{n}.conf").write_text(conf)
+        self.stub("wg", f'[ "$1 $2" = "show interfaces" ] && echo "{up}"; exit 0')
+        self.stub("wg-quick", "exit 0")
+        self.stub("timeout", "exit 0")                 # the connectivity probe "succeeds"
+
+    def test_app_default_falls_back_to_the_wireguard_default(self):
+        # Boot before login / not signed in: the app can't connect (code 5),
+        # but the WireGuard default still protects — and stays the fallback.
+        self.wg_setup("veloguard")
+        self.default_app.write_text("proton\n")
+        self.stub("protonvpn", 'case "$1" in status) echo "Status: Disconnected";;\n'
+                  'connect) echo "Authentication required. Please sign in"; exit 2;; esac')
+        r = self.run_vpn("connect")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("wg-quick up veloguard", self.calls.read_text())
+        self.assertEqual(self.default_app.read_text().strip(), "proton")
+
+    def test_preserved_default_gets_a_connectable_name(self):
+        self.wg_setup("veloguard", "mullvad")          # a REAL veloguard.conf + a named one
+        self.default_app.write_text("proton\n")
+        r = self.run_vpn("connect", "mullvad")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        wg = self.d / "wireguard"
+        self.assertTrue((wg / "vg-imported.conf").is_file())      # ≤15 chars: wg-quick accepts it
+        self.assertEqual(os.readlink(wg / "veloguard.conf"), str(wg / "mullvad.conf"))
+        self.assertFalse(self.default_app.exists())                # a named profile is the default now
+
+    def test_app_connect_takes_wireguard_down_and_restores_it_on_failure(self):
+        self.wg_setup("mullvad", up="mullvad")
+        self.stub("protonvpn", 'case "$1" in status) echo "Status: Disconnected";;\n'
+                  'connect) echo "Connection failed."; exit 1;; esac')
+        self.assertEqual(self.run_vpn("connect", "proton").returncode, 1)
+        calls = self.calls.read_text()
+        self.assertIn("wg-quick down mullvad", calls)               # one tunnel at a time
+        self.assertIn("wg-quick up mullvad", calls)                 # …and it came back
+
     def test_disconnect_reaches_the_apps(self):
         self.stub("protonvpn", 'case "$1" in status) echo "Status: Connected";; esac')
         r = self.run_vpn("disconnect")

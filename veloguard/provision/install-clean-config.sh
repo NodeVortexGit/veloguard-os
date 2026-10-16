@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install-clean-config — the "Clean Config" laptop desktop: IVELINYTBG1's
+# install-clean-config — the "Clean Config" laptop desktop: NodeVortex's
 # Clean_Config_Hyperland (a caelestia-dots/shell fork: Dynamic Island, black +
 # dark-blue rice) on Hyprland.
 #
@@ -92,7 +92,9 @@ say "=== $(date -u) — target user: ${TARGET_USER:-<none>}"
 
 build_system() {
   say "official packages…"
-  pacman -S --noconfirm --needed "${OFFICIAL[@]}"
+  # -Syu, never -S: if the install's driver step couldn't finish its full
+  # upgrade, a bare -S would put new packages on top of old libraries.
+  pacman -Syu --noconfirm --needed "${OFFICIAL[@]}"
 
   local W; W="$(mktemp -d "$SRC/build.XXXXXX")"; trap 'rm -rf "$W"' RETURN
 
@@ -122,11 +124,16 @@ build_system() {
 
   say "Material Symbols Rounded (icon font)…"
   local fd=/usr/local/share/fonts/material-symbols
-  if [ ! -s "$fd/MaterialSymbolsRounded.ttf" ]; then
+  # Validated before it's kept: a cut-off download used to stay in place, and
+  # every re-run then skipped both the download and the check.
+  if ! file "$fd/MaterialSymbolsRounded.ttf" 2>/dev/null | grep -qiE 'TrueType|OpenType'; then
     install -d "$fd"
-    curl -fsSL --retry 3 -o "$fd/MaterialSymbolsRounded.ttf" \
-      "https://raw.githubusercontent.com/google/material-design-icons/master/variablefont/MaterialSymbolsRounded%5BFILL%2CGRAD%2Copsz%2Cwght%5D.ttf"
-    file "$fd/MaterialSymbolsRounded.ttf" | grep -qiE 'TrueType|OpenType' || die "icon font download is not a font"
+    curl -fsSL --retry 3 -o "$fd/MaterialSymbolsRounded.ttf.part" \
+      "https://raw.githubusercontent.com/google/material-design-icons/master/variablefont/MaterialSymbolsRounded%5BFILL%2CGRAD%2Copsz%2Cwght%5D.ttf" \
+      || { rm -f "$fd/MaterialSymbolsRounded.ttf.part"; die "icon font download failed"; }
+    file "$fd/MaterialSymbolsRounded.ttf.part" | grep -qiE 'TrueType|OpenType' \
+      || { rm -f "$fd/MaterialSymbolsRounded.ttf.part"; die "icon font download is not a font"; }
+    mv -f "$fd/MaterialSymbolsRounded.ttf.part" "$fd/MaterialSymbolsRounded.ttf"
   fi
   fc-cache -f >/dev/null
 
@@ -150,7 +157,7 @@ build_system() {
   else
     rm -rf "$SRC/shell"; git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$SRC/shell"
   fi
-  local rev; rev="$(git -C "$SRC/shell" rev-parse HEAD)"
+  local rev; rev="$(git -C "$SRC/shell" rev-parse HEAD)"; BUILT_REV="$rev"
   (
     cd "$SRC/shell"
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -161,7 +168,6 @@ build_system() {
     cmake --build build -j "$JOBS"
     cmake --install build
   )
-  echo "$rev" > "$STAMP"
   say "shell installed (revision ${rev:0:12})"
 
   # Optional: Albert (the config's launcher). A failure here is not fatal: the
@@ -182,6 +188,10 @@ build_system() {
       say "albert did not build — 'albert toggle' opens fuzzel until it does (re-run to retry)"
     fi
   fi
+  # Stamped LAST: if anything above is interrupted (the installer's deadline,
+  # a reboot mid-build), the next run builds again instead of deploying a
+  # config whose launcher — `albert` — doesn't exist yet.
+  echo "$BUILT_REV" > "$STAMP"
 }
 
 # Real Albert on PATH — the shim doesn't count, so a re-run retries the build.

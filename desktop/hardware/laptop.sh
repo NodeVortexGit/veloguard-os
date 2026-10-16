@@ -9,7 +9,13 @@ pkgs=(power-profiles-daemon)                       # the Waybar/GNOME/COSMIC pow
 [ "${VG_HW_sensors:-0}" = 1 ]      && pkgs+=(iio-sensor-proxy)   # 2-in-1 rotation, ambient light
 [ "${VG_HW_fingerprint:-0}" = 1 ]  && pkgs+=(fprintd)            # enroll: fprintd-enroll
 [ "${VG_HW_thunderbolt:-0}" = 1 ]  && pkgs+=(bolt)               # Thunderbolt device authorization
-[ "${VG_HW_hybrid_gpu:-0}" = 1 ]   && pkgs+=(nvidia-prime)       # prime-run <app> → dGPU on demand
+# PRIME offload only once nvidia.sh (which runs before this) really installed
+# the NVIDIA driver. nvidia-prime depends on the CURRENT nvidia-utils, which
+# blacklists nouveau: on a pre-Turing hybrid laptop (MX150, GTX 10xx — whose
+# legacy driver is AUR-only) it left the dGPU with no driver at all.
+nvidia_ok=0
+pacman -T nvidia-utils >/dev/null 2>&1 && nvidia_ok=1   # -T: provides count (legacy branches)
+[ "${VG_HW_hybrid_gpu:-0}" = 1 ] && [ "$nvidia_ok" = 1 ] && pkgs+=(nvidia-prime)   # prime-run <app> → dGPU on demand
 
 vg_pkg_add "${pkgs[@]}" || exit 1
 
@@ -18,8 +24,8 @@ systemctl enable power-profiles-daemon.service 2>/dev/null || true
 
 # Hybrid NVIDIA laptops: let the dGPU drop to D3 when idle — otherwise it
 # burns several watts of battery doing nothing (Turing+ supports fine-grained
-# runtime PM through the open driver).
-if [ "${VG_HW_hybrid_gpu:-0}" = 1 ]; then
+# runtime PM through the open driver). Only for the NVIDIA driver itself.
+if [ "${VG_HW_hybrid_gpu:-0}" = 1 ] && [ "$nvidia_ok" = 1 ]; then
   install -d /etc/modprobe.d
   printf 'options nvidia "NVreg_DynamicPowerManagement=0x02"\n' > /etc/modprobe.d/nvidia-pm.conf
 fi

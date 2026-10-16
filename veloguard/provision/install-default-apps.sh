@@ -22,7 +22,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # Run a command as the real desktop user (defaults are per-user, not root).
 # Under the installer (root, in the target chroot) there is no SUDO_USER —
 # use the account Calamares just created, not root.
-USER_NAME="${SUDO_USER:-}"
+# The installer passes the new account as $1.
+USER_NAME="${1:-${SUDO_USER:-}}"
+getent passwd "$USER_NAME" >/dev/null 2>&1 || USER_NAME=""
 [ -n "$USER_NAME" ] || USER_NAME="$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}')"
 USER_NAME="${USER_NAME:-$USER}"
 as_user() { sudo -u "$USER_NAME" env XDG_RUNTIME_DIR="/run/user/$(id -u "$USER_NAME")" "$@"; }

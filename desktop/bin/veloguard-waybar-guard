@@ -21,10 +21,13 @@ if command -v ip >/dev/null 2>&1; then
     | awk 'NR==1{sub(/@.*/,"",$1); print $1}')"
 fi
 # …or a provider app's tunnel (Proton/Nord/Surfshark run theirs through
-# NetworkManager — OpenVPN ones are tun devices, not "wireguard").
+# NetworkManager). A plain tun device only counts when it carries the default
+# route — Tailscale, ZeroTier or a VM's tap is a tun too, and must not hide
+# the untrusted-Wi-Fi alarm.
 if [ -z "$vpn_iface" ] && command -v nmcli >/dev/null 2>&1; then
-  vpn_iface="$(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null \
-    | awk -F: '$NF ~ /^(vpn|wireguard|tun)$/ {print $1; exit}')"
+  egress="$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')"
+  vpn_iface="$(nmcli -t -f NAME,TYPE,DEVICE connection show --active 2>/dev/null \
+    | awk -F: -v eg="$egress" '$2 ~ /^(vpn|wireguard)$/ || ($2 == "tun" && $3 == eg && eg != "") {print $1; exit}')"
 fi
 
 # --- Wi-Fi: current SSID + trusted? -----------------------------------------

@@ -15,8 +15,11 @@ ExecStart=/usr/local/bin/veloguard-hardware
 # Only stamped when the run succeeds; all.sh exits 75 when offline so the
 # drivers are retried on the next boot instead of being skipped forever.
 ExecStartPost=/usr/bin/bash -c 'mkdir -p /var/lib/veloguard && touch /var/lib/veloguard/.hardware-done'
-# A first-boot full upgrade + DKMS builds can take a while on slow links.
-TimeoutStartSec=45min
+# A first-boot full upgrade + DKMS builds — and, after an offline install, the
+# chosen desktop (Clean Config builds from source) — take a while on slow
+# links. Nothing waits on this unit (it isn't ordered before any target), and
+# a timeout here would kill pacman mid-transaction.
+TimeoutStartSec=3h
 
 [Install]
 WantedBy=multi-user.target

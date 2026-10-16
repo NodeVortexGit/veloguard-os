@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=VeloGuard VPN auto-protect
+Comment=Connect your VPN app at login when this Wi-Fi isn't trusted
+Exec=/usr/local/bin/veloguard-vpn-autoprotect
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

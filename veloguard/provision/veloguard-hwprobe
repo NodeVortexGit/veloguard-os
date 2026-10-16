@@ -24,7 +24,10 @@ rd() { cat "$1" 2>/dev/null || true; }
 # --- chassis --------------------------------------------------------------
 # SMBIOS chassis types: 8 Portable, 9 Laptop, 10 Notebook, 11 Hand Held,
 # 14 Sub Notebook, 30 Tablet, 31 Convertible, 32 Detachable.
-virt="$(systemd-detect-virt 2>/dev/null || echo none)"
+# systemd-detect-virt prints "none" AND exits 1 on bare metal — so the old
+# `|| echo none` produced "none\nnone", and every bare-metal desktop (plus any
+# laptop found only by its battery) was classified "vm".
+virt="$(systemd-detect-virt 2>/dev/null)"; [ -n "$virt" ] || virt=none
 ctype="$(rd "$SYS/class/dmi/id/chassis_type")"
 battery=0
 for b in "$SYS"/class/power_supply/*; do
@@ -40,9 +43,12 @@ esac
 
 # --- PCI: GPUs, Wi-Fi ---------------------------------------------------------
 gpu_intel=0 gpu_amd=0 gpu_nvidia=0 nvidia_gsp=0 wifi="" wifi_broadcom_wl=0
-# Broadcom chips that only the proprietary wl driver handles (BCM4352/4360/
-# 43602/4331 family); everything else Broadcom is covered by b43/brcmfmac.
-WL_ONLY=" 0x4331 0x4353 0x4357 0x4358 0x4359 0x43a0 0x43b1 0x43ba 0x43bb 0x43bc "
+# Broadcom chips with no usable in-kernel driver: BCM43227 (0x4358), BCM43228
+# (0x4359), BCM4360 (0x43a0), BCM4352 (0x43b1), plus BCM4331 (0x4331, whose b43
+# path needs firmware no package ships). NOT 0x43ba-0x43bc (BCM43602: brcmfmac)
+# or 0x4353/0x4357 (BCM43224/43225: brcmsmac) — broadcom-wl blacklists those
+# drivers, so "fixing" them killed Wi-Fi that worked out of the box.
+WL_ONLY=" 0x4331 0x4358 0x4359 0x43a0 0x43b1 "
 for d in "$SYS"/bus/pci/devices/*; do
   [ -e "$d/class" ] || continue
   cls="$(rd "$d/class")"; ven="$(rd "$d/vendor")"; dev="$(rd "$d/device")"

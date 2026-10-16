@@ -58,6 +58,15 @@ main() {
   # packages against old libraries), and DKMS needs headers matching the
   # kernel that's actually installed — the ISO-era versions are long gone
   # from the mirrors.
+  # A lock with no pacman running is left from a killed run (power loss, a
+  # timeout mid-transaction) and would block every package operation forever.
+  if [ -e /var/lib/pacman/db.lck ] && ! pgrep -x pacman >/dev/null 2>&1; then
+    rm -f /var/lib/pacman/db.lck; log "removed a stale pacman lock"
+  fi
+  # Keyring first (the one sanctioned partial update): the disc's
+  # archlinux-keyring predates every packager who joined since, and their
+  # packages would fail signature checks in the -Syu below.
+  pacman -Sy --noconfirm --needed archlinux-keyring >>"$LOG" 2>&1 || true
   if ! pacman -Syu --noconfirm >>"$LOG" 2>&1; then
     log "system sync/upgrade failed (offline?) — will retry on next boot"
     exit 75
