@@ -7,16 +7,25 @@
 # and could only appear through XWayland, if root was let onto it at all. The
 # live account has passwordless sudo (live image only), so hand the session's
 # display variables over explicitly; pkexec stays the fallback.
+#
+# QT_QUICK_BACKEND=software: the installer's QML pages (Desktop page,
+# slideshow) render through Qt Quick, whose GL path SEGFAULTS the whole
+# installer when EGL can't initialise for the root process — seen on QEMU
+# without virgl ("egl: failed to create dri2 screen", then SIGSEGV right after
+# the welcome page). Software rendering is plenty for these pages and works on
+# every GPU and every VM.
 if ! command -v calamares >/dev/null 2>&1; then
   msg="The installer (Calamares) is missing from this image — it was built without iso/pkgs."
   notify-send "VeloGuardOS installer" "$msg" 2>/dev/null || echo "$msg" >&2
   exit 1
 fi
 if sudo -n true 2>/dev/null; then
-  exec sudo -n /usr/bin/env \
+  # -u SUDO_*: sudo would otherwise hand SUDO_USER=veloguard (the live
+  # account) to every install step, and the target has no such user.
+  exec sudo -n /usr/bin/env -u SUDO_USER -u SUDO_UID -u SUDO_GID -u SUDO_COMMAND \
     WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
     DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-}" \
-    QT_QPA_PLATFORM="${WAYLAND_DISPLAY:+wayland;}xcb" LANG="${LANG:-C.UTF-8}" \
-    /usr/bin/calamares "$@"
+    QT_QPA_PLATFORM="${WAYLAND_DISPLAY:+wayland;}xcb" QT_QUICK_BACKEND=software \
+    LANG="${LANG:-C.UTF-8}" /usr/bin/calamares "$@"
 fi
 exec pkexec /usr/bin/calamares "$@"

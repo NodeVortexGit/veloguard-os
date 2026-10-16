@@ -20,8 +20,11 @@ USB stick and it runs live, with an "Install to Disk" option. Built by
 - Bulgarian Mode assets at `/opt/Bulgarian_Mode` + its launcher. 🇧🇬
 - **Install VeloGuardOS** launcher → **Calamares**, the one installer
   (archinstall is gone). Beyond the stock pages it adds a **Desktop** page —
-  Clean Config (Hyprland rice, pre-selected on laptops), VeloGuard Hyprland,
-  GNOME, Xfce, niri, i3, COSMIC — and during installation it probes every
+  Clean Config (NodeVortex's Hyprland rice, installed exactly as published,
+  pre-selected on laptops), VeloGuard Hyprland, GNOME, Xfce, niri, i3, COSMIC,
+  or **Headless** (no desktop: text login, desktop stack removed; the guard,
+  VPN, drivers and Ollama stay). The installer wears the default VeloGuard
+  theme (navy + cyan). During installation it probes every
   component (`veloguard-hwprobe`) and installs its drivers: NVIDIA (open/
   legacy, DKMS for every kernel), Vulkan, VA-API, Broadcom `wl`, Bluetooth,
   and on laptops power-profiles/thermald/sensors/fingerprint/Thunderbolt and

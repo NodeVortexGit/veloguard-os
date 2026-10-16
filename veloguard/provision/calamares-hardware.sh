@@ -15,7 +15,11 @@ U="${1:-}"
 HW=/usr/share/veloguard/hardware/all.sh
 [ -f "$HW" ] || { echo "no hardware layer at $HW — first boot will handle drivers"; exit 0; }
 echo "machine: $(/opt/veloguard/provision/veloguard-hwprobe --human | tr '\n' ';')"
-if VELOGUARD_HW_USER="$U" VELOGUARD_HW_SKIP_INITRAMFS=1 bash "$HW"; then
+# Finish inside Calamares' 3600 s deadline on our own terms: at the deadline
+# Calamares kills only this script, and pacman/DKMS would keep running in the
+# target while the next steps — and the final unmount — go ahead. timeout(1)
+# signals the whole process group; SIGINT lets pacman abort and unlock.
+if VELOGUARD_HW_USER="$U" VELOGUARD_HW_SKIP_INITRAMFS=1 timeout -s INT -k 120 3300 bash "$HW"; then
   mkdir -p /var/lib/veloguard && touch /var/lib/veloguard/.hardware-done
   echo "drivers installed"
 else

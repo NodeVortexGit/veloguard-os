@@ -20,7 +20,7 @@ cp -r /usr/share/archiso/configs/releng "$PROFILE"
 # 2. our identity
 sed -i 's/^iso_name=.*/iso_name="veloguardos"/'  "$PROFILE/profiledef.sh"
 sed -i 's/^iso_label=.*/iso_label="VELOGUARDOS"/' "$PROFILE/profiledef.sh"
-sed -i 's#^iso_publisher=.*#iso_publisher="VeloGuardOS <https://github.com/IVELINYTBG1/veloguard-os>"#' "$PROFILE/profiledef.sh"
+sed -i 's#^iso_publisher=.*#iso_publisher="VeloGuardOS <https://github.com/NodeVortexGit/veloguard-os>"#' "$PROFILE/profiledef.sh"
 sed -i 's/^iso_application=.*/iso_application="VeloGuardOS Live"/' "$PROFILE/profiledef.sh"
 # boot-menu titles: "Arch Linux" -> "VeloGuardOS"
 sed -i 's/Arch Linux/VeloGuardOS/g' "$PROFILE"/syslinux/*.cfg 2>/dev/null || true
@@ -79,6 +79,8 @@ cp -r "$REPO/desktop/defaults" "$PROFILE/airootfs/usr/share/veloguard/desktop"
 cp -r "$REPO/desktop/themes"   "$PROFILE/airootfs/usr/share/veloguard/themes"
 cp -r "$REPO/desktop/hardware" "$PROFILE/airootfs/usr/share/veloguard/hardware"
 cp -r "$REPO/desktop/agents"   "$PROFILE/airootfs/usr/share/veloguard/agents"
+# The desktop package set, so a headless install knows what to remove.
+install -Dm644 "$REPO/desktop/packages.desktop" "$PROFILE/airootfs/usr/share/veloguard/packages.desktop"
 cp -r "$REPO/desktop/skel/.config/." "$PROFILE/airootfs/etc/skel/.config/"
 for b in "$REPO/desktop/bin/"*; do
   install -Dm755 "$b" "$PROFILE/airootfs/usr/local/bin/$(basename "$b")"
@@ -107,9 +109,12 @@ ln -sfn /usr/share/veloguard/themes/veloguard \
   printf ')\n'
 } >> "$PROFILE/profiledef.sh"
 
-# 6. guard tools on PATH (the launcher cd's into /opt/veloguard)
+# 6. guard tools on PATH (the launcher cd's into /opt/veloguard).
+#    veloguard-install-gui is what the "Install VeloGuardOS" menu entry runs —
+#    it was missing here, so that entry pointed at a file that didn't exist
+#    and the installer could not be started from the desktop at all.
 mkdir -p "$PROFILE/airootfs/usr/local/bin"
-for b in veloguard veloguard-install veloguard-vpn veloguard-vpn-ui \
+for b in veloguard veloguard-install veloguard-install-gui veloguard-vpn veloguard-vpn-ui \
          veloguard-wifi-doctor veloguard-wifi-autodetect veloguard-wifi-trust \
          veloguard-update veloguard-netwatch veloguard-bulgarian-mode veloguard-mcp; do
   ln -sf "/opt/veloguard/bin/$b" "$PROFILE/airootfs/usr/local/bin/$b"
@@ -240,7 +245,10 @@ ConditionPathExists=!/home/veloguard
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/bash -c 'useradd -m -G wheel -s /usr/bin/bash veloguard && passwd -d veloguard'
+# No idle lock / screen-off for the live account: it has no password to type,
+# and an install (Clean Config builds for ~15 min) runs unattended — a lock
+# then just hides the installer. Installed systems keep the normal hypridle.
+ExecStart=/usr/bin/bash -c 'useradd -m -G wheel -s /usr/bin/bash veloguard && passwd -d veloguard && printf "general {\\n    after_sleep_cmd = hyprctl dispatch dpms on\\n}\\n" > /home/veloguard/.config/hypr/hypridle.conf && chown veloguard:veloguard /home/veloguard/.config/hypr/hypridle.conf'
 [Install]
 WantedBy=multi-user.target
 UNIT

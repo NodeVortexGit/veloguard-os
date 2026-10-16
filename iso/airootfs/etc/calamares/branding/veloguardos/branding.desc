@@ -15,9 +15,9 @@ strings:
     versionedName:       VeloGuardOS 0.1.0
     shortVersionedName:  VeloGuardOS
     bootloaderEntryName:  VeloGuardOS
-    productUrl:          https://github.com/IVELINYTBG1/veloguard-os
-    supportUrl:          https://github.com/IVELINYTBG1/veloguard-os
-    releaseNotesUrl:     https://github.com/IVELINYTBG1/veloguard-os
+    productUrl:          https://github.com/NodeVortexGit/veloguard-os
+    supportUrl:          https://github.com/NodeVortexGit/veloguard-os
+    releaseNotesUrl:     https://github.com/NodeVortexGit/veloguard-os
 
 images:
     productLogo:         "veloguard-logo.png"
@@ -26,9 +26,14 @@ images:
 
 slideshow:               "show.qml"
 
-# Blue-shield theme
+slideshowAPI: 1
+
+# The default VeloGuard theme (desktop/themes/veloguard). Calamares 3.4 reads
+# exactly these four keys — the old sidebarTextSelect/sidebarTextHighlight
+# spellings were silently ignored, so the sidebar never had these colours.
+# The rest of the window: stylesheet.qss; the QML pages: theme.js.
 style:
-    sidebarBackground:    "#13203a"
-    sidebarText:          "#e8eef7"
-    sidebarTextSelect:    "#17a2b8"
-    sidebarTextHighlight: "#1f7fbf"
+    SidebarBackground:        "#0d1729"
+    SidebarText:              "#e6edf7"
+    SidebarTextCurrent:       "#0d1729"
+    SidebarBackgroundCurrent: "#33ccff"

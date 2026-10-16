@@ -13,10 +13,24 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import io.calamares.core 1.0
+import "theme.js" as Theme
 
-Item {
+Pane {
     id: page
     width: 800; height: 480
+    padding: 0
+    background: Rectangle { color: Theme.bg }
+    palette.window: Theme.bg
+    palette.windowText: Theme.fg
+    palette.text: Theme.fg
+    palette.base: Theme.deep
+    palette.button: Theme.deep
+    palette.buttonText: Theme.fg
+    palette.highlight: Theme.accent
+    palette.highlightedText: Theme.deep
+    palette.mid: Theme.line
+    palette.dark: Theme.line
+    palette.placeholderText: Theme.muted
 
     function gset(k, v) { Global.insert(k, v) }
 
@@ -29,7 +43,7 @@ Item {
         // ---- View 0: cloud AI (API) -------------------------------------
         ColumnLayout {
             spacing: 14
-            Label { text: "AI setup"; font.pixelSize: 22; font.bold: true; color: "#13203a" }
+            Label { text: "AI setup"; font.pixelSize: 22; font.bold: true; color: Theme.fg }
             Label {
                 text: "VeloGuardOS is AI-first. Pick a cloud provider and key, or host it locally."
                 wrapMode: Text.WordWrap; Layout.fillWidth: true; opacity: 0.8
@@ -80,7 +94,7 @@ Item {
         // ---- View 1: local (Ollama) model picker ------------------------
         ColumnLayout {
             spacing: 14
-            Label { text: "Local AI (Ollama)"; font.pixelSize: 22; font.bold: true; color: "#13203a" }
+            Label { text: "Local AI (Ollama)"; font.pixelSize: 22; font.bold: true; color: Theme.fg }
             Label {
                 text: "Choose a model to install locally — private, free, runs on this machine."
                 wrapMode: Text.WordWrap; Layout.fillWidth: true; opacity: 0.8
