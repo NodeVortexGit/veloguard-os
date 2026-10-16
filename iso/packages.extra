@@ -22,6 +22,11 @@ nftables
 wireguard-tools
 bubblewrap
 tor
+# Proton VPN's official app + CLI (Arch repos): sign in once in the app and
+# `veloguard-vpn connect proton` / auto-protect connect through it. NordVPN
+# (AUR) and Surfshark (Flathub) install on demand from the VPN menu.
+proton-vpn-gtk-app
+proton-vpn-cli
 
 # universal package formats (default apps install via flatpak on first run)
 flatpak

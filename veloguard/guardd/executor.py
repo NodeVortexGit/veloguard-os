@@ -12,8 +12,10 @@ real firewall requires apply=True and (usually) root. Safe by default.
 from __future__ import annotations
 
 import ipaddress
+import os
 import shutil
 import subprocess
+from pathlib import Path
 
 from .actions import _validate_process_target, validate_vpn_target
 
@@ -22,6 +24,13 @@ SET = "blocklist"          # ipv4_addr
 SET6 = "blocklist6"        # ipv6_addr — an inet table still needs one set per family
 QUARANTINE_DIR = "/run/veloguard/quarantine"  # /run is tmpfs == RAM
 WG_DIR = "/etc/wireguard"                      # where wg-quick reads <profile>.conf
+# Provider apps (signed in once by the user) serve a VPN target when no
+# WireGuard profile of that name exists; bin/veloguard-vpn drives them as the
+# desktop user and verifies the connection. Fixed path next to this package —
+# deliberately not overridable from the environment of a root process.
+APP_PROVIDERS = frozenset({"proton", "nord", "surfshark"})
+DEFAULT_APP_FILE = "/etc/veloguard/vpn-default-app"
+VPN_HELPER = str(Path(__file__).resolve().parents[1] / "bin" / "veloguard-vpn")
 
 
 class NftExecutor:
@@ -132,6 +141,18 @@ class NftExecutor:
         target = validate_vpn_target(target) or "veloguard"
         if target == "tor":
             return self._sh(["systemctl", "start", "tor"])
+        if self._app_for(target) is not None:
+            # The provider's own app (signed in by the user) connects; the
+            # helper refuses with a clear reason when it can't (not signed in,
+            # no desktop session, app open in the foreground…). Same rule as a
+            # WireGuard tunnel: one that carries no traffic is rolled back.
+            out = self._sh([VPN_HELPER, "connect", target])
+            if self.apply and not self._tunnel_has_connectivity():
+                self._sh([VPN_HELPER, "disconnect"])
+                raise RuntimeError(
+                    f"the {target} app reported a connection but nothing gets "
+                    f"through — disconnected it again")
+            return out
         # A WireGuard profile with AllowedIPs=0.0.0.0/0 *replaces the default
         # route*. If the profile is missing or its endpoint is dead, every
         # interface (Wi-Fi AND wired) silently black-holes — the connection
@@ -162,7 +183,26 @@ class NftExecutor:
         target = validate_vpn_target(target) or "veloguard"
         if target == "tor":
             return self._sh(["systemctl", "stop", "tor"])
+        if self._app_for(target) is not None:
+            return self._sh([VPN_HELPER, "disconnect"])
         return self._sh(["wg-quick", "down", target])
+
+    @staticmethod
+    def _app_for(target: str) -> str | None:
+        """The provider app serving `target` — only when NO WireGuard profile
+        of that name exists (a profile always wins, exactly as before)."""
+        if os.path.exists(f"{WG_DIR}/{target}.conf"):
+            return None
+        if target in APP_PROVIDERS:
+            return target
+        if target == "veloguard":
+            try:
+                with open(DEFAULT_APP_FILE) as fh:
+                    app = fh.read().strip()
+            except OSError:
+                return None
+            return app if app in APP_PROVIDERS else None
+        return None
 
     # --- VPN safety: a tunnel that can't carry traffic is worse than none ----
     @staticmethod

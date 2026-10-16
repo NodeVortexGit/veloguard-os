@@ -13,18 +13,34 @@
 #   veloguard-vpn connect [name]                # bring <name> up + make it the default;
 #                                               #   refuses endpoint-less configs and rolls
 #                                               #   back a tunnel with no connectivity
+#   veloguard-vpn connect proton|nord|surfshark # no WireGuard profile by that name? → the
+#                                               #   provider's OFFICIAL app does it, as you:
+#                                               #   sign in to the app once, and from then on
+#                                               #   every connect (menu, auto-protect on
+#                                               #   untrusted Wi-Fi) uses that signed-in app
+#   veloguard-vpn app <provider> install|open|installed
+#                                               # Proton: Arch repos · Surfshark: Flathub
+#                                               #   (verified) · NordVPN: AUR (as your user)
 #   veloguard-vpn disconnect                    # tear down ALL active WireGuard tunnels
+#                                               #   and the provider apps' connections
 #   veloguard-vpn default <name>                # set the default without connecting
 #   veloguard-vpn url proton|mullvad|surfshark  # where to get a config (for scripts/UI)
 #   veloguard-vpn proton|mullvad|surfshark      # human hint for the same
 #   veloguard-vpn tor                           # install + enable the Tor fallback
 #   veloguard-vpn status
 #
-# Exit codes (the GNOME extension branches on these):
-#   2 = no config for that profile   3 = config has no Endpoint   4 = dead tunnel, rolled back
+# Exit codes (the menu / GNOME extension branch on these):
+#   2 = no config for that profile (proton|nord|surfshark: and no provider app either)
+#   3 = config has no Endpoint   4 = dead tunnel, rolled back
+#   5 = the provider's app needs you — sign in, or connect from the app itself
+#
+# Resolution order never changes for existing setups: a WireGuard profile
+# /etc/wireguard/<name>.conf always wins; the apps are used only without one.
 #
 set -euo pipefail
-WG=/etc/wireguard
+WG="${VELOGUARD_WG_DIR:-/etc/wireguard}"   # (pkexec's clean env can't override these)
+DEFAULT_APP="${VELOGUARD_VPN_DEFAULT_APP:-/etc/veloguard/vpn-default-app}"
+SURFSHARK_ID=com.surfshark.Surfshark
 say()  { printf '\033[1;36m[veloguard-vpn]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[veloguard-vpn]\033[0m %s\n' "$*" >&2; }
 priv() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
@@ -82,6 +98,7 @@ check_wg_conf() {  # $1 = config file; prints the reason (never file content) on
 set_default() {  # point veloguard.conf (the guard's default) at <name>'s config
   local name="$1"
   valid_name "$name"
+  priv rm -f "$DEFAULT_APP"            # a WireGuard default replaces an app default
   [ "$name" = veloguard ] && return 0
   if ! priv test -f "$WG/$name.conf"; then
     warn "no config for '$name' — import one first"; return 1
@@ -93,6 +110,215 @@ set_default() {  # point veloguard.conf (the guard's default) at <name>'s config
   fi
   priv ln -sfn "$WG/$name.conf" "$WG/veloguard.conf"
   say "default profile → $name"
+}
+
+# --- provider apps -------------------------------------------------------------
+is_app() { case "$1" in proton|nord|surfshark) return 0 ;; esac; return 1; }
+app_label() { case "$1" in proton) echo "Proton VPN" ;; nord) echo "NordVPN" ;; surfshark) echo "Surfshark" ;; esac; }
+
+default_app() {  # the app that is the default (set by the last app connect)
+  local a=""
+  [ -r "$DEFAULT_APP" ] && read -r a < "$DEFAULT_APP" 2>/dev/null
+  is_app "$a" && echo "$a"
+}
+
+app_default() {  # make <app> the default: "connect" / auto-protect now use it
+  priv install -d -m755 "$(dirname "$DEFAULT_APP")"
+  if priv test -L "$WG/veloguard.conf"; then
+    priv rm -f "$WG/veloguard.conf"
+  elif priv test -f "$WG/veloguard.conf"; then
+    priv mv "$WG/veloguard.conf" "$WG/veloguard-imported.conf"
+    say "previous default preserved as veloguard-imported.conf"
+  fi
+  printf '%s\n' "$1" | priv tee "$DEFAULT_APP" >/dev/null
+}
+
+# The person whose app (and app sign-in) this is: pkexec's or sudo's caller,
+# the invoking user, or — when root runs us with no caller (the NM dispatcher's
+# auto-protect, the guard) — whoever has the active graphical session.
+session_user() {
+  if [ -n "${PKEXEC_UID:-}" ]; then id -nu "$PKEXEC_UID"; return; fi
+  if [ "$(id -u)" -ne 0 ]; then id -nu; return; fi
+  if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then echo "$SUDO_USER"; return; fi
+  local s u
+  for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+    u="$(loginctl show-session "$s" -p Active -p Class -p Type -p Name 2>/dev/null | awk -F= '
+          { v[$1] = $2 }
+          END { if (v["Active"] == "yes" && v["Class"] == "user" &&
+                    (v["Type"] == "wayland" || v["Type"] == "x11")) print v["Name"] }')"
+    [ -n "$u" ] && { echo "$u"; return; }
+  done
+  return 1
+}
+
+# Run a provider CLI as that user, inside their D-Bus session: the apps keep
+# their sign-in in the user's keyring (Secret Service) and talk to NetworkManager
+# as the user. polkit maps a process outside a logind session to the user's
+# graphical session, so NM's allow_active rules apply from the dispatcher too.
+as_user() {
+  local u="$1" uid; shift
+  uid="$(id -u "$u")" || return 1
+  if [ "$(id -u)" -eq "$uid" ]; then "$@"; return; fi
+  runuser -u "$u" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" HOME="$(getent passwd "$u" | cut -d: -f6)" "$@"
+}
+
+app_installed() {  # $1 = provider, $2 = user (surfshark: per-user Flatpak installs count)
+  case "$1" in
+    proton)    command -v protonvpn >/dev/null 2>&1 ;;
+    nord)      command -v nordvpn >/dev/null 2>&1 ;;
+    surfshark) command -v flatpak >/dev/null 2>&1 \
+                 && { flatpak info "$SURFSHARK_ID" >/dev/null 2>&1 \
+                      || { [ -n "${2:-}" ] && as_user "$2" flatpak info "$SURFSHARK_ID" >/dev/null 2>&1; }; } ;;
+  esac
+}
+
+# Surfshark's app drives NetworkManager (its Flatpak talks to NM over the
+# system bus), so its live tunnel is an active NM connection named after it.
+surfshark_active() {
+  nmcli -t -f NAME,TYPE connection show --active 2>/dev/null \
+    | awk -F: 'tolower($1) ~ /surfshark/ && $NF ~ /^(vpn|wireguard|tun)$/ {print $1}'
+}
+
+app_connect() {  # $1 = provider; exits with the codes documented at the top
+  local p="$1" label u out rc=0
+  label="$(app_label "$p")"
+  if ! u="$(session_user)"; then
+    warn "$label: no one is signed in to a desktop session, so its app can't be used"; exit 5
+  fi
+  if ! app_installed "$p" "$u"; then
+    url="$(provider_url "$p" 2>/dev/null || true)"
+    warn "no $label app and no WireGuard config — install the app: veloguard-vpn app $p install"
+    warn "  (or use a WireGuard config${url:+: $url}, then: veloguard-vpn import <file> $p)"
+    exit 2
+  fi
+  case "$p" in
+    proton)
+      out="$(as_user "$u" protonvpn status 2>&1)" || true
+      if [[ $out == *"desktop app is currently running"* ]]; then
+        # The CLI refuses to run beside the GUI (and still exits 0).
+        warn "the Proton VPN app is open — connect from it, or close it and VeloGuard connects for you"; exit 5
+      fi
+      if [[ $out == *"Status: Connected"* ]]; then
+        app_default proton; say "already connected: $label"; return 0
+      fi
+      out="$(as_user "$u" protonvpn connect 2>&1)" || rc=$?
+      if [ "$rc" -eq 0 ] && [[ $out == *"Connected to"* ]]; then
+        app_default proton; say "connected: $label — ${out%%$'\n'*}"; return 0
+      fi
+      if [[ $out == *"Authentication required"* || $out == *"sign in"* ]]; then
+        warn "$label: not signed in — open the app once and sign in"; exit 5
+      fi
+      warn "$label: connect failed: $(tail -n1 <<<"$out")"; exit 1 ;;
+    nord)
+      out="$(as_user "$u" nordvpn status 2>&1)" || true
+      if [[ $out == *"Status: Connected"* ]]; then
+        app_default nord; say "already connected: $label"; return 0
+      fi
+      if [[ $out == *"ermission denied"* ]]; then
+        warn "$label: $u can't reach the NordVPN daemon — sudo gpasswd -a $u nordvpn, then log out and in"; exit 1
+      fi
+      out="$(as_user "$u" nordvpn account 2>&1)" || true
+      if [[ ${out,,} == *"not logged in"* ]]; then
+        warn "$label: not signed in — run: nordvpn login"; exit 5
+      fi
+      out="$(as_user "$u" nordvpn connect 2>&1)" || rc=$?
+      if [ "$rc" -eq 0 ] && [[ $out == *"connected"* ]]; then
+        app_default nord; say "connected: $label"; return 0
+      fi
+      warn "$label: connect failed: $(tail -n1 <<<"$out")"; exit 1 ;;
+    surfshark)
+      if [ -n "$(surfshark_active)" ]; then
+        app_default surfshark; say "already connected: $label"; return 0
+      fi
+      # Surfshark ships no command line — its own Auto-connect setting is what
+      # makes it connect unattended; VeloGuard opens the app for the rest.
+      warn "$label has no command line: open the app and connect (turn on its Auto-connect so it protects you by itself)"
+      exit 5 ;;
+  esac
+}
+
+app_disconnect_all() {  # every provider app's connection; prints the ones it downed
+  local u out c
+  u="$(session_user 2>/dev/null)" || u=""
+  if [ -n "$u" ] && command -v protonvpn >/dev/null 2>&1; then
+    out="$(as_user "$u" protonvpn status 2>&1)" || true
+    [[ $out == *"Status: Connected"* ]] && as_user "$u" protonvpn disconnect >/dev/null 2>&1 && echo proton
+  fi
+  if [ -n "$u" ] && command -v nordvpn >/dev/null 2>&1; then
+    out="$(as_user "$u" nordvpn status 2>&1)" || true
+    [[ $out == *"Status: Connected"* ]] && as_user "$u" nordvpn disconnect >/dev/null 2>&1 && echo nord
+  fi
+  while IFS= read -r c; do
+    [ -n "$c" ] && priv nmcli connection down id "$c" >/dev/null 2>&1 && echo "surfshark"
+  done < <(surfshark_active)
+  return 0
+}
+
+app_cmd() {  # veloguard-vpn app <provider> install|open|installed
+  local p="${1:-}" what="${2:-}" t
+  is_app "$p" || { warn "usage: veloguard-vpn app proton|nord|surfshark install|open|installed"; exit 1; }
+  case "$what" in
+    installed) app_installed "$p" "$(session_user 2>/dev/null || true)" ;;
+    install)
+      case "$p" in
+        proton)     # official app + CLI, both in Arch's own repos; the keyring
+                    # keeps the sign-in (SDDM's PAM unlocks it at login)
+          priv pacman -S --noconfirm --needed proton-vpn-gtk-app proton-vpn-cli gnome-keyring ;;
+        surfshark)  # Surfshark's own verified Flathub build
+          priv pacman -S --noconfirm --needed flatpak gnome-keyring
+          priv flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          priv flatpak install --system -y --noninteractive flathub "$SURFSHARK_ID" ;;
+        nord)       # only on the AUR (a repack of Nord's official .deb) — built
+                    # as you, never as root, with your sudo for the install
+          [ "$(id -u)" -ne 0 ] || { warn "run this as your desktop user, not root: veloguard-vpn app nord install"; exit 1; }
+          t="$(mktemp -d)"; trap 'rm -rf "$t"' EXIT
+          git clone --depth 1 https://aur.archlinux.org/nordvpn-bin.git "$t/nordvpn-bin"
+          say "review the PKGBUILD before it builds: $t/nordvpn-bin/PKGBUILD"
+          ( cd "$t/nordvpn-bin" && makepkg -si --needed )
+          sudo systemctl enable --now nordvpnd.socket 2>/dev/null || sudo systemctl enable --now nordvpnd.service
+          sudo gpasswd -a "$(id -nu)" nordvpn
+          say "NordVPN installed — log out and back in once (nordvpn group), then: nordvpn login" ;;
+      esac
+      say "$(app_label "$p") app installed — sign in once: veloguard-vpn app $p open" ;;
+    open)
+      # GUIs need the desktop session's environment — run from it, not pkexec.
+      [ "$(id -u)" -ne 0 ] || { warn "run from your desktop session (not as root): veloguard-vpn app $p open"; exit 1; }
+      case "$p" in
+        proton)    setsid -f protonvpn-app >/dev/null 2>&1 ;;
+        surfshark) setsid -f flatpak run "$SURFSHARK_ID" >/dev/null 2>&1 ;;
+        nord)      # nordvpn login prints the sign-in URL and opens the browser
+          t="$(command -v alacritty || command -v foot || command -v kitty || command -v xterm || true)"
+          if [ -n "$t" ]; then setsid -f "$t" -e bash -c 'nordvpn login; read -rp "Press Enter to close…" _' >/dev/null 2>&1
+          else nordvpn login; fi ;;
+      esac ;;
+    *) warn "usage: veloguard-vpn app $p install|open|installed"; exit 1 ;;
+  esac
+}
+
+wg_connect() {
+  local name="$1" ok h i
+  if ! has_endpoint "$WG/$name.conf"; then
+    warn "$name.conf has no Endpoint — bringing it up would black-hole all routing; refusing"
+    exit 3
+  fi
+  # one tunnel at a time: tear down anything active first
+  for i in $(priv wg show interfaces 2>/dev/null); do
+    priv wg-quick down "$i" >/dev/null 2>&1 || true
+  done
+  priv wg-quick up "$name"
+  sleep 1.5                       # the first WireGuard handshake is async
+  ok=""
+  for h in 1.1.1.1 9.9.9.9; do
+    if timeout 3 bash -c "exec 3<>/dev/tcp/$h/443" 2>/dev/null; then ok=1; break; fi
+  done
+  if [ -z "$ok" ]; then
+    priv wg-quick down "$name" >/dev/null 2>&1 || true
+    warn "tunnel '$name' came up but has no connectivity (dead endpoint?) — rolled back"
+    exit 4
+  fi
+  set_default "$name" || true     # don't fail a working connection over the symlink
+  say "connected: $name"
 }
 
 cmd="${1:-help}"; shift || true
@@ -121,39 +347,27 @@ case "$cmd" in
   connect)
     name="${1:-veloguard}"
     valid_name "$name"
-    if ! priv test -f "$WG/$name.conf"; then
+    if priv test -f "$WG/$name.conf"; then
+      wg_connect "$name"                          # a WireGuard profile always wins
+    elif [ "$name" = veloguard ] && app="$(default_app)"; then
+      app_connect "$app"                          # the default is a provider app
+    elif is_app "$name"; then
+      app_connect "$name"
+    else
       url="$(provider_url "$name" 2>/dev/null || true)"
       warn "no config for '$name'${url:+ — get one: $url}; then: veloguard-vpn import <file> $name"
       exit 2
     fi
-    if ! has_endpoint "$WG/$name.conf"; then
-      warn "$name.conf has no Endpoint — bringing it up would black-hole all routing; refusing"
-      exit 3
-    fi
-    # one tunnel at a time: tear down anything active first
-    for i in $(priv wg show interfaces 2>/dev/null); do
-      priv wg-quick down "$i" >/dev/null 2>&1 || true
-    done
-    priv wg-quick up "$name"
-    sleep 1.5                       # the first WireGuard handshake is async
-    ok=""
-    for h in 1.1.1.1 9.9.9.9; do
-      if timeout 3 bash -c "exec 3<>/dev/tcp/$h/443" 2>/dev/null; then ok=1; break; fi
-    done
-    if [ -z "$ok" ]; then
-      priv wg-quick down "$name" >/dev/null 2>&1 || true
-      warn "tunnel '$name' came up but has no connectivity (dead endpoint?) — rolled back"
-      exit 4
-    fi
-    set_default "$name" || true     # don't fail a working connection over the symlink
-    say "connected: $name"
     ;;
   disconnect)
-    downed=""
+    downed="$(app_disconnect_all | sort -u | tr '\n' ' ')"
     for i in $(priv wg show interfaces 2>/dev/null); do
-      priv wg-quick down "$i" && downed=1
+      priv wg-quick down "$i" >/dev/null 2>&1 && downed+="$i "
     done
-    if [ -n "$downed" ]; then say "VPN off"; else say "no active tunnel"; fi
+    if [ -n "$downed" ]; then say "VPN off (${downed% })"; else say "no active tunnel"; fi
+    ;;
+  app)
+    app_cmd "$@"
     ;;
   default)
     set_default "${1:?usage: veloguard-vpn default <name>}"
@@ -179,13 +393,21 @@ case "$cmd" in
       say "default profile: $(basename "$(priv readlink "$WG/veloguard.conf")" .conf)"
     elif priv test -f "$WG/veloguard.conf"; then
       say "default profile: veloguard (imported file)"
+    elif app="$(default_app)"; then
+      say "default: the $(app_label "$app") app"
     else
-      say "no default profile — veloguard-vpn connect proton|mullvad|surfshark"
+      say "no default profile — veloguard-vpn connect proton|nord|surfshark (app) or import a WireGuard config"
     fi
+    u="$(session_user 2>/dev/null)" || u=""
+    for p in proton nord surfshark; do
+      app_installed "$p" "$u" && say "$(app_label "$p") app: installed"
+    done
+    if [ -n "$(surfshark_active)" ]; then say "Surfshark: connected"; fi
     systemctl is-active tor >/dev/null 2>&1 && say "tor: active" || true
     ;;
   *)
     echo "usage: veloguard-vpn import <wg.conf> [name] | connect [name] | disconnect |"
+    echo "       app proton|nord|surfshark install|open|installed |"
     echo "       default <name> | url <provider> | tor | proton | mullvad | surfshark | status"
     ;;
 esac

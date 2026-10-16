@@ -49,18 +49,53 @@ vpn_menu() {
   esac
 }
 
+# A provider's own app is the easy path: sign in to it once and VeloGuard
+# connects through it from then on (menu and auto-protect alike). A WireGuard
+# profile of the same name still takes precedence — nothing changes for
+# setups that already import configs.
 vpn_connect() {
   local name="$1" label="$2" rc=0
   pkexec "$VPN" connect "$name" || rc=$?
-  if [ "$rc" -eq 0 ]; then
-    note "VPN up: $label (now the default)"
-  elif [ "$rc" -eq 2 ]; then
-    local url; url="$("$VPN" url "$name" 2>/dev/null || true)"
-    [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1 || true
-    note "No $label config yet — download a WireGuard config, then VPN ▸ Import config…"
-  else
-    note "VPN failed (code $rc) — try: veloguard-vpn status"
-  fi
+  case "$rc" in
+    0) note "VPN up: $label (now the default)" ;;
+    5) # the app is there but wants you: sign in / connect in it
+       "$VPN" app "$name" open || true
+       if [ "$name" = surfshark ]; then
+         note "Surfshark is open — connect there and turn on its Auto-connect; it then protects you by itself"
+       else
+         note "Sign in to $label (once) — after that VeloGuard connects it for you, auto-protect included"
+       fi ;;
+    2) vpn_offer_app "$name" "$label" ;;
+    *) note "VPN failed (code $rc) — try: veloguard-vpn status" ;;
+  esac
+}
+
+vpn_offer_app() {  # no app, no WireGuard config: install the official app?
+  local name="$1" label="$2" pick url
+  pick="$(printf '%s\n' "Install the official $label app (recommended)" \
+                        "Use a WireGuard config instead" | menu "$label")" || return 0
+  case "$pick" in
+    "Install the official"*)
+      if [ "$name" = nord ]; then
+        # AUR build: as this user, in a terminal (makepkg + sudo prompt)
+        local t; t="$(command -v alacritty || command -v foot || command -v kitty || command -v xterm || true)"
+        [ -n "$t" ] || { note "No terminal found — run: veloguard-vpn app nord install"; return 0; }
+        "$t" -e bash -c "$VPN app nord install; read -rp 'Press Enter to close…' _" || true
+        "$VPN" app nord installed && "$VPN" app nord open
+        return 0
+      fi
+      note "Installing the $label app…"
+      if pkexec "$VPN" app "$name" install; then
+        "$VPN" app "$name" open || true
+        note "$label installed — sign in once; then VPN ▸ Connect: $label connects with one click"
+      else
+        note "$label install failed (offline?) — try: veloguard-vpn app $name install"
+      fi ;;
+    *)
+      url="$("$VPN" url "$name" 2>/dev/null || true)"
+      [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1 || true
+      note "Download a $label WireGuard config, then VPN ▸ Import config…" ;;
+  esac
 }
 
 trust_toggle() {
@@ -74,7 +109,7 @@ trust_toggle() {
   case "$r" in
     trusted)          note "Wi-Fi trusted — no auto-VPN" ;;
     untrusted)        note "Wi-Fi untrusted — VPN connecting" ;;
-    untrusted-no-vpn) note "Wi-Fi untrusted — import a VPN config to auto-protect" ;;
+    untrusted-no-vpn) note "Wi-Fi untrusted — but no VPN came up (VPN… to connect or set one up)" ;;
     *)                note "Wi-Fi trust: $action ($ssid)" ;;
   esac
 }

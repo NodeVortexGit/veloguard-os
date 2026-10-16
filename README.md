@@ -38,9 +38,12 @@ do anything outside policy.
 - **🧠 Pluggable AI plane** — run fully **local** (Ollama, private, free) or via
   **API** (Claude, OpenAI/Codex, Groq…). Hot-swap the brain at runtime; keys are
   stored `chmod 600` and never logged. First-boot **setup screen** picks for you.
-- **🔒 Auto-VPN on untrusted Wi-Fi** — open/unknown network → WireGuard comes up
-  automatically. Backends: ProtonVPN free tier, self-hosted, Mullvad/Surfshark,
-  **Tor** fallback. *(No peer-relay — we won't make you liable for strangers' traffic.)*
+- **🔒 Auto-VPN on untrusted Wi-Fi** — open/unknown network → the VPN comes up
+  automatically. Easiest: **the provider's own app, signed in once** — Proton VPN
+  (preinstalled), Surfshark (Flathub) or NordVPN (AUR) — and VeloGuard connects
+  through it from then on (`veloguard-vpn connect proton`). Or import any
+  WireGuard config (Proton, Mullvad, Surfshark, self-hosted), plus a **Tor**
+  fallback. *(No peer-relay — we won't make you liable for strangers' traffic.)*
 - **🍯 Honeypot + AI diagnosis** — decoy services capture attackers; the AI writes
   the threat report. **Bonus:** a local high-end model gets the deepest analysis.
 - **🧊 Process quarantine** — freeze an unknown process into a RAM (tmpfs) sandbox;

@@ -60,9 +60,12 @@ case "${1:-status}" in
     echo "trusted" ;;
   untrust)
     set_db untrusted; list_del; touch "$LIST"; chmod 644 "$LIST" 2>/dev/null || true
-    # auto-protect: VPN up if a default profile is configured (rc 2 = none)
+    # auto-protect: the default VPN (WireGuard profile or provider app) up.
+    # Any failure — none configured (2), dead tunnel (3/4), the app wants a
+    # sign-in (5) — means this Wi-Fi is NOT protected; say so, never "untrusted"
+    # (which the UI reports as "VPN connecting").
     if "$VPN" connect veloguard >/dev/null 2>&1; then echo "untrusted"
-    else [ "$?" = 2 ] && echo "untrusted-no-vpn" || echo "untrusted"; fi ;;
+    else echo "untrusted-no-vpn"; fi ;;
   *)
     echo "usage: veloguard-wifi-trust trust|untrust" >&2; exit 1 ;;
 esac

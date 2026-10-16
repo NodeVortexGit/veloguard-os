@@ -107,6 +107,106 @@ class ExecutorArgv(unittest.TestCase):
         self.assertIn("ip6 saddr @blocklist6 drop", out)
 
 
+class VpnApps(unittest.TestCase):
+    """A provider's signed-in app serves a VPN target only when no WireGuard
+    profile of that name exists — existing profile setups behave as before."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp(prefix="vg-wg-")
+        self.default_app = os.path.join(self.d, "vpn-default-app")
+        for name, val in (("WG_DIR", self.d), ("DEFAULT_APP_FILE", self.default_app)):
+            patcher = mock.patch.object(executor, name, val)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def plan(self, target):
+        return executor.NftExecutor(apply=False).vpn_up(target)
+
+    def test_wireguard_profile_wins_over_the_app(self):
+        Path(self.d, "proton.conf").write_text("[Interface]\n")
+        self.assertEqual(self.plan("proton"), "[dry-run] wg-quick up proton")
+
+    def test_app_used_without_a_profile(self):
+        self.assertEqual(self.plan("proton"),
+                         f"[dry-run] {executor.VPN_HELPER} connect proton")
+        self.assertTrue(executor.VPN_HELPER.endswith("/bin/veloguard-vpn"))
+
+    def test_default_target_follows_the_default_app(self):
+        Path(self.default_app).write_text("nord\n")
+        self.assertEqual(self.plan(None), f"[dry-run] {executor.VPN_HELPER} connect veloguard")
+        Path(self.default_app).write_text("../../tmp/x\n")      # junk → plain WireGuard path
+        self.assertEqual(self.plan(None), "[dry-run] wg-quick up veloguard")
+
+    def test_non_app_names_never_reach_the_helper(self):
+        self.assertEqual(self.plan("mullvad"), "[dry-run] wg-quick up mullvad")
+
+
+class VpnHelperApps(unittest.TestCase):
+    """bin/veloguard-vpn's app backends, against stub provider CLIs."""
+
+    HELPER = HERE.parent / "bin" / "veloguard-vpn"
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="vg-vpnapp-"))
+        self.bin = self.d / "bin"
+        self.bin.mkdir()
+        self.default_app = self.d / "vpn-default-app"
+        self.calls = self.d / "calls"
+        (self.d / "wireguard").mkdir()
+        self.stub("sudo", 'exec "$@"')        # never the real sudo, even as non-root
+
+    def stub(self, name, body):
+        f = self.bin / name
+        f.write_text(f"#!/bin/bash\necho \"{name} $*\" >> {self.calls}\n{body}\n")
+        f.chmod(0o755)
+
+    def run_vpn(self, *args):
+        env = {"PATH": f"{self.bin}:/usr/bin:/bin", "PKEXEC_UID": str(os.getuid()),
+               "VELOGUARD_VPN_DEFAULT_APP": str(self.default_app), "HOME": str(self.d),
+               "VELOGUARD_WG_DIR": str(self.d / "wireguard")}
+        return subprocess.run(["bash", str(self.HELPER), *args], env=env,
+                              capture_output=True, text=True, timeout=30)
+
+    def test_no_app_and_no_profile_is_code_2(self):
+        self.assertEqual(self.run_vpn("connect", "proton").returncode, 2)
+
+    def test_signed_out_proton_asks_for_sign_in(self):
+        self.stub("protonvpn", 'case "$1" in status) echo "Status: Disconnected";;\n'
+                  'connect) echo "Error: Authentication required.Please sign in with '
+                  "'protonvpn signin' before connecting.\"; exit 2;; esac")
+        r = self.run_vpn("connect", "proton")
+        self.assertEqual(r.returncode, 5, r.stderr)
+        self.assertFalse(self.default_app.exists())
+
+    def test_proton_gui_open_is_not_reported_as_connected(self):
+        # The CLI refuses to run beside the GUI and still exits 0.
+        self.stub("protonvpn", 'echo "Error: Proton VPN desktop app is currently running"')
+        self.assertEqual(self.run_vpn("connect", "proton").returncode, 5)
+
+    def test_signed_in_proton_connects_and_becomes_the_default(self):
+        self.stub("protonvpn", 'case "$1" in status) echo "Status: Disconnected";;\n'
+                  'connect) echo "Connected to CH#1 in Zurich, Switzerland.";; esac')
+        r = self.run_vpn("connect", "proton")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.default_app.read_text().strip(), "proton")
+        # …and the plain default ("veloguard") now goes through the app
+        self.assertEqual(self.run_vpn("connect").returncode, 0)
+        self.assertEqual(self.calls.read_text().count("protonvpn connect"), 2)
+
+    def test_surfshark_only_counts_as_up_with_its_tunnel_active(self):
+        self.stub("flatpak", 'exit 0')
+        self.stub("nmcli", 'exit 0')                         # nothing active
+        self.assertEqual(self.run_vpn("connect", "surfshark").returncode, 5)
+        self.stub("nmcli", 'echo "Surfshark WireGuard:wireguard"')
+        self.assertEqual(self.run_vpn("connect", "surfshark").returncode, 0)
+
+    def test_disconnect_reaches_the_apps(self):
+        self.stub("protonvpn", 'case "$1" in status) echo "Status: Connected";; esac')
+        r = self.run_vpn("disconnect")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("protonvpn disconnect", self.calls.read_text())
+
+
 class Policy(unittest.TestCase):
     def setUp(self):
         policy._SHARED.clear()

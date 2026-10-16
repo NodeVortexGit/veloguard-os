@@ -29,6 +29,9 @@ sddm
 
 # Polkit agent (VPN import / update-arming raise polkit prompts)
 polkit-gnome
+# Secret Service keyring: provider VPN apps (Proton, Surfshark) keep their
+# sign-in here; SDDM's PAM unlocks it at login, so you stay signed in.
+gnome-keyring
 
 # Terminal, editor, files, thumbnails
 alacritty

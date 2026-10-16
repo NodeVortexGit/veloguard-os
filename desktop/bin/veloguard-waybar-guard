@@ -20,6 +20,12 @@ if command -v ip >/dev/null 2>&1; then
   vpn_iface="$(ip -br link show type wireguard 2>/dev/null \
     | awk 'NR==1{sub(/@.*/,"",$1); print $1}')"
 fi
+# …or a provider app's tunnel (Proton/Nord/Surfshark run theirs through
+# NetworkManager — OpenVPN ones are tun devices, not "wireguard").
+if [ -z "$vpn_iface" ] && command -v nmcli >/dev/null 2>&1; then
+  vpn_iface="$(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null \
+    | awk -F: '$NF ~ /^(vpn|wireguard|tun)$/ {print $1; exit}')"
+fi
 
 # --- Wi-Fi: current SSID + trusted? -----------------------------------------
 # Current SSID, unescaped: `nmcli -t` writes ':' inside an SSID as '\:' and
