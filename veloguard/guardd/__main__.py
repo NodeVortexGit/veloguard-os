@@ -211,12 +211,18 @@ def _vpn_up_through_guard(ex: NftExecutor, profile: str, note: str) -> str:
     audited message instead of a traceback — this path runs unattended from the
     NetworkManager dispatcher, where failing safe must not mean killing the net."""
     action = Action(ActionType.VPN_UP, {"target": profile} if profile else {})
-    decision = PolicyEngine.load(DEFAULT_POLICY_PATH).evaluate(action)
+    try:
+        action.validate()          # the profile comes from a stored pref
+    except ValueError as exc:
+        record({"control": "net", "action": "vpn_up", "target": profile,
+                "result": "invalid", "error": str(exc), "note": note})
+        return f"VPN not applied — {exc}"
+    decision = PolicyEngine.shared(DEFAULT_POLICY_PATH).evaluate(action)
     if decision.verdict == Verdict.DENY:
         return f"VPN blocked by policy: {decision.reason}"
     try:
-        out, result = ex.vpn_up(profile), "executed"
-    except RuntimeError as exc:
+        out, result = ex.vpn_up(action.params.get("target")), "executed"
+    except (RuntimeError, ValueError) as exc:
         out, result = f"VPN not applied — {exc}", "failed"
     record({"control": "net", "action": "vpn_up", "target": profile,
             "result": result, "output": out, "note": note})
@@ -284,11 +290,18 @@ def _auto_block(ex: NftExecutor, ip: str) -> str:
         action.validate()
     except ValueError as e:
         return f"not blocked: {e}"
-    decision = PolicyEngine.load(DEFAULT_POLICY_PATH).evaluate(action)
+    engine = PolicyEngine.shared(DEFAULT_POLICY_PATH)
+    decision = engine.evaluate(action)          # protected ranges + rate limit
     if decision.verdict == Verdict.DENY:
         return f"not blocked: {decision.reason}"
-    out = ex.block_ip(ip)
-    record({"control": "honeypot", "action": "block_ip", "params": {"ip": ip},
+    try:
+        out = ex.block_ip(action.params["ip"])
+    except RuntimeError as e:
+        record({"control": "honeypot", "action": "block_ip", "params": action.params,
+                "result": "failed", "error": str(e)})
+        return f"not blocked: {e}"
+    engine.record(action)                        # count it toward the rate limit
+    record({"control": "honeypot", "action": "block_ip", "params": action.params,
             "result": "executed", "output": out})
     return out
 
@@ -367,7 +380,11 @@ def _agent(rest: list[str]) -> int:
         del rest[i:i + 2]
     if "--max-steps" in rest:
         i = rest.index("--max-steps")
-        max_steps = int(rest[i + 1]) if i + 1 < len(rest) else 8
+        raw = rest[i + 1] if i + 1 < len(rest) else "8"
+        if not raw.isdigit() or not 1 <= int(raw) <= 50:
+            print("--max-steps must be an integer 1-50", file=sys.stderr)
+            return 2
+        max_steps = int(raw)
         del rest[i:i + 2]
     if autonomy not in ("read", "guarded", "full"):
         autonomy = "guarded"
@@ -442,11 +459,18 @@ def _update(rest: list[str]) -> int:
 
         if sub == "apply":
             # Verification happens inside the updater regardless of consent.
+            # The kernel domain means the shippable path — stage the signed
+            # prebuilt package for apply-on-reboot. Compiling from source
+            # (--build) is the developer/kernel-tree path only.
+            def _kernel(dry: bool) -> str:
+                if build:
+                    return updater.apply_kernel(build=True, dry_run=dry)
+                return updater.stage_kernel(dry_run=dry)
             if not do_apply:
                 if domain in ("all", "veloguard"):
                     print(updater.apply_veloguard(dry_run=True))
                 if domain in ("all", "kernel"):
-                    print(updater.apply_kernel(build=build, dry_run=True))
+                    print(_kernel(True))
                 print("\n(preview only — add --apply to execute)")
                 return 0
             if not yes:
@@ -459,7 +483,7 @@ def _update(rest: list[str]) -> int:
             if domain in ("all", "veloguard"):
                 out.append(updater.apply_veloguard(dry_run=False))
             if domain in ("all", "kernel"):
-                out.append(updater.apply_kernel(build=build, dry_run=False))
+                out.append(_kernel(False))
             for line in out:
                 print(line)
             record({"control": "update", "sub": "apply", "domain": domain,
@@ -536,7 +560,7 @@ def _run_safe(rest: list[str]) -> int:
     except ValueError as e:
         print(e, file=sys.stderr)
         return 2
-    decision = PolicyEngine.load(DEFAULT_POLICY_PATH).evaluate(action)
+    decision = PolicyEngine.shared(DEFAULT_POLICY_PATH).evaluate(action)
     if decision.verdict == Verdict.DENY:
         print(f"DENIED: {decision.reason}", file=sys.stderr)
         return 1
@@ -769,7 +793,7 @@ def _run(argv: list[str]) -> int:
         return 2
 
     # 2. Control plane: judge it
-    engine = PolicyEngine.load(args.policy)
+    engine = PolicyEngine.shared(args.policy)
     decision = engine.evaluate(action)
     base = {"intent": args.intent, "provider": provider,
             "model": cfg.get("model"), "action": action.type.value,
@@ -789,8 +813,15 @@ def _run(argv: list[str]) -> int:
             record({**base, "result": "aborted_by_user"})
             return 1
 
-    # 4. Kernel plane: do it
-    out = _execute(action, ex)
+    # 4. Kernel plane: do it. The executor self-protects (refuses a tunnel
+    #    with no endpoint, rolls back a dead one, refuses to run unsandboxed)
+    #    — audit those refusals like every other decision, no traceback.
+    try:
+        out = _execute(action, ex)
+    except (RuntimeError, ValueError) as e:
+        print(f"FAILED: {action.describe()} — {e}", file=sys.stderr)
+        record({**base, "result": "failed", "error": str(e)})
+        return 1
     engine.record(action)
     print(out)
     record({**base, "result": "executed", "output": out})

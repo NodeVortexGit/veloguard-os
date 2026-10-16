@@ -9,8 +9,52 @@ it, and the executor to carry it out. Nothing else can reach the kernel.
 from __future__ import annotations
 
 import ipaddress
+import os
+import re
+import shlex
 from dataclasses import dataclass, field
 from enum import Enum
+
+# Targets reach root-run argv and filesystem paths (pkill, rm -rf under
+# /run/veloguard/quarantine, wg-quick's /etc/wireguard/<name>.conf), and they
+# are AI-proposed — i.e. attacker-influenced via prompt injection. Shape them
+# here, once, for every brain and every entry point (CLI, agent, MCP).
+#   process name: what the kernel keeps in /proc/<pid>/comm (≤15 bytes); no
+#     leading '-' (option injection) or '.' (path traversal), no '/'.
+#   VPN profile: wg-quick's own interface-name rule, minus leading '.'/'-'.
+_PROC_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]{0,14}$")
+_VPN_NAME_RE = re.compile(r"^[A-Za-z0-9_=+][A-Za-z0-9_=+.-]{0,14}$")
+_PID_MAX = 4194304                     # kernel PID_MAX_LIMIT on 64-bit
+SANDBOX_TIERS = ("light", "strong", "vm")
+
+
+def _validate_process_target(target) -> str:
+    """A quarantine target is a real PID or an exact process name — never a
+    pattern, a path, or something that freezes the whole machine."""
+    if not isinstance(target, str):
+        target = str(target)
+    target = target.strip()
+    if target.isdigit():
+        pid = int(target)
+        if pid <= 1 or pid > _PID_MAX:
+            raise ValueError(f"refusing pid {pid}: not a userspace process")
+        if pid in (os.getpid(), os.getppid()):
+            raise ValueError("refusing to quarantine the guard itself")
+        return str(pid)
+    if not _PROC_NAME_RE.fullmatch(target):
+        raise ValueError(f"invalid process target {target!r}: use a pid or an "
+                         "exact process name (letters, digits, _.+-; ≤15 chars)")
+    return target
+
+
+def validate_vpn_target(target) -> str | None:
+    """None (default profile), 'tor', or a wg-quick interface name."""
+    if target in (None, ""):
+        return None
+    if not isinstance(target, str) or not _VPN_NAME_RE.fullmatch(target):
+        raise ValueError(f"invalid VPN profile {target!r}: a WireGuard profile "
+                         "name (letters, digits, _=+.-; ≤15 chars) or 'tor'")
+    return target
 
 
 class ActionType(str, Enum):
@@ -44,19 +88,43 @@ class Action:
         This is *shape* validation only (is the IP a real IP?). Whether the
         action is *allowed* is the policy engine's job, not ours.
         """
+        if not isinstance(self.params, dict):
+            raise ValueError("action params must be an object")
         if self.type in (ActionType.BLOCK_IP, ActionType.UNBLOCK_IP):
             ip = self.params.get("ip")
             if not ip:
                 raise ValueError(f"{self.type.value} requires an 'ip' param")
             # Raises ValueError on garbage; normalises e.g. trailing zeros.
-            self.params["ip"] = str(ipaddress.ip_address(ip))
+            self.params["ip"] = str(ipaddress.ip_address(str(ip)))
         if self.type in (ActionType.QUARANTINE, ActionType.RELEASE_QUARANTINE,
                          ActionType.KILL_QUARANTINE):
             if not self.params.get("target"):
                 raise ValueError(f"{self.type.value} requires a 'target' "
                                  "(pid or process name)")
-        if self.type == ActionType.SANDBOX_RUN and not self.params.get("target"):
-            raise ValueError("sandbox_run requires a 'target' (command to run)")
+            self.params["target"] = _validate_process_target(self.params["target"])
+        if self.type in (ActionType.VPN_UP, ActionType.VPN_DOWN):
+            tgt = validate_vpn_target(self.params.get("target"))
+            if tgt is None:
+                self.params.pop("target", None)
+            else:
+                self.params["target"] = tgt
+        if self.type == ActionType.SANDBOX_RUN:
+            target = self.params.get("target")
+            if not target or not isinstance(target, str):
+                raise ValueError("sandbox_run requires a 'target' (command to run)")
+            try:
+                if not shlex.split(target):
+                    raise ValueError("sandbox_run target is empty")
+            except ValueError as e:
+                raise ValueError(f"sandbox_run target is not a valid command: {e}") from None
+            tier = self.params.get("tier", "light")
+            if tier not in SANDBOX_TIERS:
+                raise ValueError(f"sandbox tier must be one of {', '.join(SANDBOX_TIERS)}")
+            self.params["tier"] = tier
+            net = self.params.get("net", False)
+            if not isinstance(net, bool):
+                raise ValueError("sandbox 'net' must be true or false")
+            self.params["net"] = net
 
     def describe(self) -> str:
         if self.type == ActionType.BLOCK_IP:

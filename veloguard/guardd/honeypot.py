@@ -22,6 +22,13 @@ from pathlib import Path
 
 _RAM_DIR = Path("/run/veloguard/honeypot")   # /run is tmpfs == RAM (root)
 
+# It faces attackers, so bound everything an attacker controls:
+SESSION_SECONDS = 10           # wall-clock cap per connection (slowloris)
+MAX_SESSIONS = 64              # concurrent handler threads
+MAX_CAPTURE_BYTES = 16 << 20   # captures.jsonl lives in RAM — rotate past 16 MiB
+_slots = threading.BoundedSemaphore(MAX_SESSIONS)
+_persist_lock = threading.Lock()
+
 
 def capture_dir() -> Path:
     """Prefer the RAM/tmpfs dir; fall back to the per-user state dir if /run
@@ -55,22 +62,38 @@ class _Handler(socketserver.BaseRequestHandler):
 
     def handle(self) -> None:
         sock = self.request
+        if not _slots.acquire(blocking=False):      # flood: drop, don't queue
+            try:
+                sock.close()
+            except OSError:
+                pass
+            return
+        try:
+            self._session(sock)
+        finally:
+            _slots.release()
+
+    def _session(self, sock) -> None:
         sock.settimeout(2.5)
         if self.banner:
             try:
                 sock.sendall(self.banner)
             except OSError:
                 return
-        chunks = []
+        chunks, total = [], 0
+        deadline = time.monotonic() + SESSION_SECONDS
         try:
-            while len(b"".join(chunks)) < 8192:
+            # 2.5 s per recv alone let a 1-byte-every-2s client hold the
+            # thread for hours; the session deadline bounds wall-clock time.
+            while total < 8192 and time.monotonic() < deadline:
                 buf = sock.recv(2048)
                 if not buf:
                     break
                 chunks.append(buf)
+                total += len(buf)
         except (socket.timeout, OSError):
             pass
-        data = b"".join(chunks)
+        data = b"".join(chunks)[:8192]
         cap = {
             "ts": time.time(),
             "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -95,8 +118,15 @@ class _Handler(socketserver.BaseRequestHandler):
 
 def _persist(cap: dict) -> None:
     try:
-        with (capture_dir() / "captures.jsonl").open("a") as f:
-            f.write(json.dumps(cap) + "\n")
+        with _persist_lock:
+            path = capture_dir() / "captures.jsonl"
+            try:
+                if path.stat().st_size > MAX_CAPTURE_BYTES:
+                    path.replace(path.with_suffix(".jsonl.1"))   # keep one generation
+            except FileNotFoundError:
+                pass
+            with path.open("a") as f:
+                f.write(json.dumps(cap) + "\n")
     except OSError:
         pass
 

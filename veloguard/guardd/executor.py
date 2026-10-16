@@ -11,11 +11,15 @@ real firewall requires apply=True and (usually) root. Safe by default.
 
 from __future__ import annotations
 
+import ipaddress
 import shutil
 import subprocess
 
+from .actions import _validate_process_target, validate_vpn_target
+
 TABLE = "inet veloguard"
-SET = "blocklist"
+SET = "blocklist"          # ipv4_addr
+SET6 = "blocklist6"        # ipv6_addr — an inet table still needs one set per family
 QUARANTINE_DIR = "/run/veloguard/quarantine"  # /run is tmpfs == RAM
 WG_DIR = "/etc/wireguard"                      # where wg-quick reads <profile>.conf
 
@@ -56,27 +60,56 @@ class NftExecutor:
         return proc.stdout.strip() or f"ok: {' '.join(cmd)}"
 
     def setup(self) -> list[str]:
-        """Idempotent-ish creation of the veloguard table, set, and drop rule."""
-        steps = [
-            ["add", "table", *TABLE.split()],
-            ["add", "set", *TABLE.split(), SET,
-             "{", "type", "ipv4_addr", ";", "flags", "interval", ";", "}"],
-            ["add", "chain", *TABLE.split(), "input",
-             "{", "type", "filter", "hook", "input",
-             "priority", "-100", ";", "policy", "accept", ";", "}"],
-            ["add", "rule", *TABLE.split(), "input",
-             "ip", "saddr", "@" + SET, "drop"],
-        ]
-        return [self._run(s) for s in steps]
+        """Create the veloguard table, both blocklist sets and their drop rules.
+
+        Idempotent: the table is flushed and rebuilt from one transaction, so
+        re-running setup never stacks duplicate drop rules (`nft add rule`
+        appends every time)."""
+        script = (
+            f"table {TABLE} {{}}\n"
+            f"flush table {TABLE}\n"
+            f"table {TABLE} {{\n"
+            f"  set {SET} {{ type ipv4_addr; flags interval; }}\n"
+            f"  set {SET6} {{ type ipv6_addr; flags interval; }}\n"
+            f"  chain input {{\n"
+            f"    type filter hook input priority -100; policy accept;\n"
+            f"    ip saddr @{SET} drop\n"
+            f"    ip6 saddr @{SET6} drop\n"
+            f"  }}\n"
+            f"}}\n"
+        )
+        return [self._run_script(script)]
+
+    def _run_script(self, script: str) -> str:
+        """Apply an nft ruleset atomically (nft -f -), same dry-run rules."""
+        if not self.apply:
+            self._planned.append(["nft", "-f", "-"])
+            return "[dry-run] nft -f - <<EOF\n" + script + "EOF"
+        self._check_seal()
+        if shutil.which("nft") is None:
+            raise RuntimeError("nft not found — install nftables")
+        proc = subprocess.run(["nft", "-f", "-"], input=script,
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"nft failed: {proc.stderr.strip()}")
+        return "ok: veloguard table ready (IPv4 + IPv6 blocklists)"
+
+    @staticmethod
+    def _set_for(ip: str) -> tuple[str, str]:
+        addr = ipaddress.ip_address(ip)          # re-validate at the point of use
+        return (SET6 if addr.version == 6 else SET), str(addr)
 
     def block_ip(self, ip: str) -> str:
-        return self._run(["add", "element", *TABLE.split(), SET, "{", ip, "}"])
+        s, ip = self._set_for(ip)
+        return self._run(["add", "element", *TABLE.split(), s, "{", ip, "}"])
 
     def unblock_ip(self, ip: str) -> str:
-        return self._run(["delete", "element", *TABLE.split(), SET, "{", ip, "}"])
+        s, ip = self._set_for(ip)
+        return self._run(["delete", "element", *TABLE.split(), s, "{", ip, "}"])
 
     def list_blocked(self) -> str:
-        return self._run(["list", "set", *TABLE.split(), SET])
+        return "\n".join([self._run(["list", "set", *TABLE.split(), SET]),
+                          self._run(["list", "set", *TABLE.split(), SET6])])
 
     # --- generic command runner (non-nft): same dry-run discipline ----------
     def _sh(self, argv: list[str]) -> str:
@@ -93,7 +126,10 @@ class NftExecutor:
 
     # --- VPN: WireGuard profiles, or Tor as the fallback transport ----------
     def vpn_up(self, target: str | None) -> str:
-        target = target or "veloguard"
+        # Validated here too: the netwatch/CLI paths reach us without an Action,
+        # and wg-quick runs the profile's PostUp hooks as root — a crafted
+        # "../../tmp/x" target would load an attacker-written config.
+        target = validate_vpn_target(target) or "veloguard"
         if target == "tor":
             return self._sh(["systemctl", "start", "tor"])
         # A WireGuard profile with AllowedIPs=0.0.0.0/0 *replaces the default
@@ -103,6 +139,10 @@ class NftExecutor:
         # verify, and roll back one that comes up with no connectivity: better
         # no VPN than no network. (Real-run only; dry-run just previews.)
         cfg = f"{WG_DIR}/{target}.conf"
+        if self.apply and self._tunnel_is_up(target):
+            # Idempotent: the NM dispatcher fires on every Wi-Fi "up"; a second
+            # `wg-quick up` on a live tunnel errors out ("already exists").
+            return f"ok: tunnel '{target}' already up"
         if self.apply and not self._config_has_endpoint(cfg):
             raise RuntimeError(
                 f"{cfg} is missing or has no Endpoint — bringing this tunnel up "
@@ -119,12 +159,19 @@ class NftExecutor:
         return out
 
     def vpn_down(self, target: str | None) -> str:
-        target = target or "veloguard"
+        target = validate_vpn_target(target) or "veloguard"
         if target == "tor":
             return self._sh(["systemctl", "stop", "tor"])
         return self._sh(["wg-quick", "down", target])
 
     # --- VPN safety: a tunnel that can't carry traffic is worse than none ----
+    @staticmethod
+    def _tunnel_is_up(name: str) -> bool:
+        if shutil.which("wg") is None:
+            return False
+        r = subprocess.run(["wg", "show", "interfaces"], capture_output=True, text=True)
+        return r.returncode == 0 and name in r.stdout.split()
+
     def _config_has_endpoint(self, path: str) -> bool:
         """A usable WireGuard profile must exist and name a non-empty Endpoint."""
         try:
@@ -158,27 +205,39 @@ class NftExecutor:
         return False
 
     # --- Quarantine: freeze an unknown process, stash its exe in RAM (tmpfs) -
+    # The target is a validated pid or EXACT process name: `pkill -x` matches
+    # the whole name (a bare `pkill .` would freeze every process on the box),
+    # `--` ends option parsing, and the stash path can't traverse out of
+    # QUARANTINE_DIR (`rm -rf …/quarantine/../../etc` was reachable before).
+    @staticmethod
+    def _signal_argv(sig: str, target: str) -> list[str]:
+        if target.isdigit():
+            return ["kill", f"-{sig}", "--", target]
+        return ["pkill", f"-{sig}", "-x", "--", target]
+
     def quarantine(self, target: str) -> str:
-        stop = ["kill", "-STOP", target] if target.isdigit() else ["pkill", "-STOP", target]
-        out = [self._sh(stop)]
+        target = _validate_process_target(target)
+        out = [self._sh(self._signal_argv("STOP", target))]
         # /run is tmpfs (RAM) on systemd systems — the "RAM partition".
         qdir = f"{QUARANTINE_DIR}/{target}"
-        out.append(self._sh(["mkdir", "-p", qdir]))
+        out.append(self._sh(["mkdir", "-p", "-m", "700", qdir]))
         if target.isdigit():
-            out.append(self._sh(["cp", "--no-dereference", f"/proc/{target}/exe",
+            # /proc/<pid>/exe is a magic link — follow it (-L) to stash the
+            # actual executable, not a dangling symlink.
+            out.append(self._sh(["cp", "-L", "--", f"/proc/{target}/exe",
                                  f"{qdir}/exe"]))
         return "\n".join(out)
 
     def release_quarantine(self, target: str) -> str:
-        cont = ["kill", "-CONT", target] if target.isdigit() else ["pkill", "-CONT", target]
-        return "\n".join([self._sh(cont),
-                          self._sh(["rm", "-rf", f"{QUARANTINE_DIR}/{target}"])])
+        target = _validate_process_target(target)
+        return "\n".join([self._sh(self._signal_argv("CONT", target)),
+                          self._sh(["rm", "-rf", "--", f"{QUARANTINE_DIR}/{target}"])])
 
     def kill_quarantine(self, target: str) -> str:
-        kill = ["kill", "-KILL", target] if target.isdigit() else ["pkill", "-KILL", target]
+        target = _validate_process_target(target)
         # SIGKILL the frozen process, then wipe its RAM stash.
-        return "\n".join([self._sh(kill),
-                          self._sh(["rm", "-rf", f"{QUARANTINE_DIR}/{target}"])])
+        return "\n".join([self._sh(self._signal_argv("KILL", target)),
+                          self._sh(["rm", "-rf", "--", f"{QUARANTINE_DIR}/{target}"])])
 
     # --- Virtualization layer: run an uncertain app isolated (RAM, no net) ---
     def sandbox_run(self, target: str, tier: str = "light",
@@ -186,6 +245,11 @@ class NftExecutor:
         import shlex
         from . import vlayer
         chosen, degraded = vlayer.resolve_tier(tier)
+        if chosen == "none":
+            # Fail CLOSED: "run it sandboxed" must never degrade to "run it
+            # with the guard's own (root) privileges" because bwrap is missing.
+            raise RuntimeError("no isolation layer installed (bubblewrap/gVisor/"
+                               "Firecracker) — refusing to run unsandboxed")
         argv = vlayer.build_argv(shlex.split(target), chosen, allow_net=allow_net)
         out = self._sh(argv)
         note = f"  (tier: {chosen}{' — degraded from ' + tier if degraded else ''}"

@@ -131,12 +131,15 @@ def run(once: bool = False) -> int:
             print(f"  ai : (not yet) {e}")
             return 2
         print(f"  ai : {reply}")
-        if should_speak(CONTEXT(), adapter):
+        # Decide ONCE: a second should_speak() call was another model round
+        # trip that could disagree with the first, logging the wrong outcome.
+        speak_aloud = should_speak(CONTEXT(), adapter)
+        if speak_aloud:
             speak(reply)
         else:
             print(f"  (staying silent — context: {CONTEXT()!r})")
         memory.log_decision("voice", text[:60], "answered",
-                            "spoke" if should_speak(CONTEXT(), adapter) else "silent")
+                            "spoke" if speak_aloud else "silent")
         if once:
             break
     return 0

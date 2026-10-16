@@ -45,11 +45,23 @@ DEFAULT_POLICY = {
         "127.0.0.0/8", "::1/128",        # loopback
         "10.0.0.0/8", "172.16.0.0/12",   # RFC1918 private
         "192.168.0.0/16",
-        "169.254.0.0/16",                # link-local
+        "169.254.0.0/16", "fe80::/10",   # link-local (v4 + v6: DHCP/ND/mDNS)
+        "fc00::/7",                      # IPv6 unique-local (home LANs)
+        "100.64.0.0/10",                 # CGNAT (carrier gateways, Tailscale)
+        "0.0.0.0/8", "::/128",           # "this host" / unspecified
+        "224.0.0.0/4", "ff00::/8",       # multicast (mDNS, SSDP, ND)
+        "255.255.255.255/32",            # limited broadcast (DHCP)
     ],
     # Sliding-window rate limit on state-changing actions.
     "rate_limit": {"max_actions": 20, "window_seconds": 60},
 }
+
+
+# One engine per policy file per process, so the sliding-window rate limit
+# actually accumulates across calls. (Building a fresh engine per action — what
+# every caller used to do — reset the window each time: the limit never fired,
+# and a long-running MCP server / agent loop / honeypot could block unbounded.)
+_SHARED: dict[str, tuple[float | None, "PolicyEngine"]] = {}
 
 
 class PolicyEngine:
@@ -62,6 +74,24 @@ class PolicyEngine:
         if path and path.exists():
             return cls(json.loads(path.read_text()))
         return cls(DEFAULT_POLICY)
+
+    @classmethod
+    def shared(cls, path: Path | None) -> "PolicyEngine":
+        """The process-wide engine for `path`; reloaded when the file changes,
+        keeping the rate-limit window across the reload."""
+        key = str(path)
+        try:
+            mtime = path.stat().st_mtime if path else None
+        except OSError:
+            mtime = None
+        cached = _SHARED.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        engine = cls.load(path)
+        if cached:
+            engine._recent = cached[1]._recent
+        _SHARED[key] = (mtime, engine)
+        return engine
 
     def _is_protected(self, ip: str) -> str | None:
         addr = ipaddress.ip_address(ip)

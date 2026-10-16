@@ -54,9 +54,12 @@ def _handle(req: dict) -> dict | None:
         return {"jsonrpc": "2.0", "id": rid, "result": {"tools": tools.mcp_tools()}}
 
     if method == "tools/call":
-        params = req.get("params", {})
-        name = params.get("name", "")
-        args = params.get("arguments", {}) or {}
+        params = req.get("params") or {}
+        name = params.get("name", "") if isinstance(params, dict) else ""
+        args = (params.get("arguments") or {}) if isinstance(params, dict) else {}
+        if not isinstance(name, str) or not isinstance(args, dict):
+            return {"jsonrpc": "2.0", "id": rid,
+                    "error": {"code": -32602, "message": "invalid tools/call params"}}
         result = dispatch.execute_tool(name, args, apply=_apply(),
                                        autonomy=_autonomy(), source="mcp")
         return {"jsonrpc": "2.0", "id": rid, "result": {
@@ -76,8 +79,17 @@ def serve() -> None:
         try:
             req = json.loads(line)
         except json.JSONDecodeError:
+            out.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+                "code": -32700, "message": "parse error"}}) + "\n")
+            out.flush()
             continue
-        resp = _handle(req)
+        if not isinstance(req, dict):
+            continue
+        try:
+            resp = _handle(req)
+        except Exception as e:   # one bad request must not kill the server
+            resp = {"jsonrpc": "2.0", "id": req.get("id"),
+                    "error": {"code": -32603, "message": f"internal error: {e}"}}
         if resp is not None:
             out.write(json.dumps(resp) + "\n")
             out.flush()
