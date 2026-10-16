@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+#
+# veloguard-hwprobe — detect every component that decides which drivers and
+# which desktop setup this machine needs. Read-only, no root required, sysfs
+# only (no lspci/lsusb dependency, works in the live ISO, the installer chroot
+# and the installed system alike).
+#
+#   veloguard-hwprobe            # key=value lines (sourceable by bash)
+#   veloguard-hwprobe --js FILE  # write a QML/JS module for the Calamares page
+#   veloguard-hwprobe --human    # one readable summary line per component
+#
+# Keys:
+#   chassis=laptop|desktop|vm|unknown   (DMI chassis type, battery, virt)
+#   gpu_intel/gpu_amd/gpu_nvidia=0|1    nvidia_gsp=0|1 (Turing+ → nvidia-open)
+#   hybrid_gpu=0|1                      (iGPU + NVIDIA dGPU: PRIME laptop)
+#   wifi=<vendor ids>  wifi_broadcom_wl=0|1   bluetooth=0|1
+#   touchpad=0|1 touchscreen=0|1 sensors=0|1 fingerprint=0|1
+#   thunderbolt=0|1 battery=0|1 cpu=intel|amd|other virt=<name|none>
+set -uo pipefail
+
+SYS="${VELOGUARD_SYSFS:-/sys}"
+rd() { cat "$1" 2>/dev/null || true; }
+
+# --- chassis --------------------------------------------------------------
+# SMBIOS chassis types: 8 Portable, 9 Laptop, 10 Notebook, 11 Hand Held,
+# 14 Sub Notebook, 30 Tablet, 31 Convertible, 32 Detachable.
+virt="$(systemd-detect-virt 2>/dev/null || echo none)"
+ctype="$(rd "$SYS/class/dmi/id/chassis_type")"
+battery=0
+for b in "$SYS"/class/power_supply/*; do
+  [ "$(rd "$b/type")" = Battery ] && [ "$(rd "$b/scope")" != Device ] && battery=1
+done
+case "$ctype" in
+  8|9|10|11|14|30|31|32) chassis=laptop ;;
+  *) if [ "$virt" != none ]; then chassis=vm
+     elif [ "$battery" = 1 ]; then chassis=laptop        # mislabelled DMI
+     elif [ -n "$ctype" ]; then chassis=desktop
+     else chassis=unknown; fi ;;
+esac
+
+# --- PCI: GPUs, Wi-Fi ---------------------------------------------------------
+gpu_intel=0 gpu_amd=0 gpu_nvidia=0 nvidia_gsp=0 wifi="" wifi_broadcom_wl=0
+# Broadcom chips that only the proprietary wl driver handles (BCM4352/4360/
+# 43602/4331 family); everything else Broadcom is covered by b43/brcmfmac.
+WL_ONLY=" 0x4331 0x4353 0x4357 0x4358 0x4359 0x43a0 0x43b1 0x43ba 0x43bb 0x43bc "
+for d in "$SYS"/bus/pci/devices/*; do
+  [ -e "$d/class" ] || continue
+  cls="$(rd "$d/class")"; ven="$(rd "$d/vendor")"; dev="$(rd "$d/device")"
+  case "$cls" in
+    0x03*)                                   # display controller
+      case "$ven" in
+        0x8086) gpu_intel=1 ;;
+        0x1002) gpu_amd=1 ;;
+        0x10de) gpu_nvidia=1; (( dev >= 0x1e00 )) && nvidia_gsp=1 ;;
+      esac ;;
+    0x0280*)                                 # network controller (Wi-Fi)
+      wifi="$wifi ${ven#0x}:${dev#0x}"
+      [ "$ven" = 0x14e4 ] && case "$WL_ONLY" in *" $dev "*) wifi_broadcom_wl=1 ;; esac ;;
+  esac
+done
+# USB Wi-Fi dongles (and any other non-PCI radio): every wireless netdev,
+# tagged with its bus so a Realtek USB stick shows up as usb-0bda:xxxx.
+for n in "$SYS"/class/net/*; do
+  [ -d "$n/wireless" ] || [ -e "$n/phy80211" ] || continue
+  case "$(readlink -f "$n/device/subsystem" 2>/dev/null)" in
+    */usb) wifi="$wifi usb-$(rd "$n/device/../idVendor"):$(rd "$n/device/../idProduct")" ;;
+  esac
+done
+hybrid_gpu=0
+[ "$gpu_nvidia" = 1 ] && { [ "$gpu_intel" = 1 ] || [ "$gpu_amd" = 1 ]; } && hybrid_gpu=1
+
+# --- USB: Wi-Fi dongles, fingerprint readers ------------------------------------
+fingerprint=0
+# Fingerprint sensor vendors libfprint drives: Synaptics, Goodix, Validity,
+# Elan (sensor line), FPC, Upek/AuthenTec, Egis.
+FP_VENDORS=" 06cb 27c6 138a 04f3 10a5 147e 08ff 1c7a "
+for u in "$SYS"/bus/usb/devices/*; do
+  [ -e "$u/idVendor" ] || continue
+  v="$(rd "$u/idVendor")"
+  case "$FP_VENDORS" in *" $v "*)
+    # Elan/Synaptics also make touchpads — require a vendor-specific (ff) or
+    # no-HID interface so a USB touchpad isn't mistaken for a reader.
+    for i in "$u":*; do [ "$(rd "$i/bInterfaceClass")" = ff ] && fingerprint=1; done ;;
+  esac
+  for i in "$u":*; do
+    [ "$(rd "$i/bInterfaceClass")" = e0 ] && [ "$(rd "$i/bInterfaceSubClass")" = 01 ] || continue
+    [ "$(rd "$i/bInterfaceProtocol")" = 01 ] && bt_usb=1        # BT radio
+  done
+done
+
+# --- input / sensors / misc ------------------------------------------------------
+touchpad=0 touchscreen=0
+if grep -qiE '^N: Name=.*(touchpad|trackpad)' /proc/bus/input/devices 2>/dev/null; then touchpad=1; fi
+if grep -qiE '^N: Name=.*touchscreen' /proc/bus/input/devices 2>/dev/null; then touchscreen=1; fi
+sensors=0
+ls "$SYS"/bus/iio/devices/iio:device* >/dev/null 2>&1 && sensors=1
+grep -qsiE 'hid_sensor|accel' "$SYS"/bus/hid/devices/*/modalias 2>/dev/null && sensors=1
+thunderbolt=0
+[ -n "$(ls -A "$SYS/bus/thunderbolt/devices" 2>/dev/null)" ] && thunderbolt=1
+bluetooth=0
+{ [ -n "$(ls -A "$SYS/class/bluetooth" 2>/dev/null)" ] || [ "${bt_usb:-0}" = 1 ]; } && bluetooth=1
+cpu=other
+grep -q GenuineIntel /proc/cpuinfo 2>/dev/null && cpu=intel
+grep -q AuthenticAMD /proc/cpuinfo 2>/dev/null && cpu=amd
+wifi="${wifi# }"
+
+emit() {
+  for k in chassis virt cpu battery gpu_intel gpu_amd gpu_nvidia nvidia_gsp hybrid_gpu \
+           wifi wifi_broadcom_wl bluetooth touchpad touchscreen sensors fingerprint thunderbolt; do
+    printf '%s=%q\n' "$k" "${!k}"
+  done
+}
+
+case "${1:-}" in
+  --js)
+    out="${2:?--js needs an output file}"
+    gpus=""; [ "$gpu_intel" = 1 ] && gpus="$gpus Intel"; [ "$gpu_amd" = 1 ] && gpus="$gpus AMD"
+    [ "$gpu_nvidia" = 1 ] && gpus="$gpus NVIDIA"; gpus="${gpus# }"
+    tmp="$(mktemp "${out}.XXXXXX")"
+    {
+      echo "// Generated at boot by veloguard-hwprobe — do not edit."
+      echo ".pragma library"
+      echo "var chassis = \"$chassis\";"
+      echo "var laptop = $([ "$chassis" = laptop ] && echo true || echo false);"
+      echo "var gpus = \"${gpus:-none detected}\";"
+      echo "var nvidia = $([ "$gpu_nvidia" = 1 ] && echo true || echo false);"
+      echo "var wifi = $([ -n "$wifi" ] && echo true || echo false);"
+      echo "var bluetooth = $([ "$bluetooth" = 1 ] && echo true || echo false);"
+      echo "var touchpad = $([ "$touchpad" = 1 ] && echo true || echo false);"
+      echo "var fingerprint = $([ "$fingerprint" = 1 ] && echo true || echo false);"
+    } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$out"
+    ;;
+  --human)
+    echo "machine : $chassis$([ "$virt" != none ] && echo " (virt: $virt)")  cpu: $cpu  battery: $battery"
+    echo "graphics: intel=$gpu_intel amd=$gpu_amd nvidia=$gpu_nvidia (gsp=$nvidia_gsp, hybrid=$hybrid_gpu)"
+    echo "network : wifi=[${wifi:-none}] broadcom-wl-only=$wifi_broadcom_wl bluetooth=$bluetooth"
+    echo "input   : touchpad=$touchpad touchscreen=$touchscreen sensors=$sensors fingerprint=$fingerprint thunderbolt=$thunderbolt"
+    ;;
+  *) emit ;;
+esac

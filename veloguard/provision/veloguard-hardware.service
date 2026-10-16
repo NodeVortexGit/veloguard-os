@@ -1,9 +1,12 @@
 [Unit]
 Description=VeloGuardOS hardware/driver setup (Omarchy-derived, first boot)
-# Needs the network up to fetch drivers, and runs once.
+# Needs the network up to fetch drivers. Runs until it has succeeded once —
+# or, when the installer couldn't download the chosen desktop, until that
+# desktop is installed too (the `|` makes these two conditions an OR).
 Wants=network-online.target
 After=network-online.target
-ConditionPathExists=!/var/lib/veloguard/.hardware-done
+ConditionPathExists=|!/var/lib/veloguard/.hardware-done
+ConditionPathExists=|/var/lib/veloguard/desktop-pending
 
 [Service]
 Type=oneshot
