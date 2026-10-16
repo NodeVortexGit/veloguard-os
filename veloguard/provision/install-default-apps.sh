@@ -34,8 +34,11 @@ ensure_flatpak() {
     elif command -v apt-get >/dev/null; then priv apt-get update && priv apt-get install -y flatpak
     elif command -v pacman  >/dev/null; then priv pacman -S --noconfirm --needed flatpak; fi
   }
+  # The repo file, not a .flatpakref: the old flathub.org/…/flathub.flatpakref
+  # URL is a 404, so under `set -e` this script died here and never installed
+  # a single default app.
   flatpak remote-add --if-not-exists flathub \
-    https://flathub.org/repo/flathub.flatpakref
+    https://dl.flathub.org/repo/flathub.flatpakrepo
 }
 
 # --- 2. the app set, from Flathub (system-wide) ----------------------------
