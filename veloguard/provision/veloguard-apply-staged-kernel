@@ -1,33 +1,94 @@
 #!/usr/bin/env bash
 #
 # veloguard-apply-staged-kernel — runs ONLY during the offline-update boot
-# (system-update.target), installs the staged VeloGuardOS kernel package,
-# regenerates the initramfs, then reboots.
+# (system-update.target), installs the staged VeloGuardOS kernel (+ headers),
+# makes it bootable, then reboots.
 #
 # Per systemd.offline-updates(7), the very FIRST thing we do is remove the
 # /system-update trigger, so a failed apply can never loop us back into update
 # mode. Started by veloguard-offline-update.service.
 set -uo pipefail
 STAGE=/var/lib/veloguard/staged-kernel
+PENDING="$STAGE/pending.json"
+PKGBASE=linux-veloguard
 exec > >(tee -a /var/log/veloguard-offline-update.log) 2>&1
 echo "=== VeloGuardOS offline kernel update — $(date -u) ==="
 
 rm -f /system-update                       # disarm FIRST (loop safety)
 
-PKG="$(ls -1 "$STAGE"/*.pkg.tar.zst 2>/dev/null | head -1)"
-if [ -n "${PKG:-}" ] && [ -f "$PKG" ]; then
-  echo "installing $PKG …"
-  if pacman -U --noconfirm "$PKG"; then
-    echo "installed — regenerating initramfs…"
-    mkinitcpio -P || true
-    rm -f "$STAGE"/*.pkg.tar.zst "$STAGE/pending.json"
-    echo "OK — kernel updated"
-  else
-    echo "pacman -U FAILED — keeping the current kernel"
+finish() { echo "rebooting…"; systemctl reboot; exit 0; }
+
+# Install exactly the files the updater verified at download time (named in
+# pending.json — never "whatever *.pkg.tar.zst sorts first", which could be a
+# stale stage), and re-check their sha256: the stage sat on disk across a boot.
+mapfile -t ENTRIES < <(python3 - "$PENDING" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+pk = d.get("packages") or (
+    [{"file": d["package"], "sha256": ""}] if d.get("package") else [])
+for p in pk:
+    print(f"{p.get('file', '')}\t{p.get('sha256', '')}")
+PY
+)
+[ "${#ENTRIES[@]}" -gt 0 ] || { echo "no pending kernel update in $PENDING — nothing to do"; finish; }
+
+PKGS=()
+for e in "${ENTRIES[@]}"; do
+  f="${e%%$'\t'*}"; want="${e#*$'\t'}"
+  if [[ ! $f =~ ^[A-Za-z0-9@._+-]+\.pkg\.tar\.zst$ ]] || [ ! -f "$STAGE/$f" ]; then
+    echo "staged package '$f' missing or malformed — keeping the current kernel"; finish
   fi
-else
-  echo "no staged package found in $STAGE — nothing to do"
+  if [ -n "$want" ]; then
+    got="$(sha256sum "$STAGE/$f" | cut -d' ' -f1)"
+    if [ "$got" != "$want" ]; then
+      echo "sha256 mismatch on $f (got ${got:0:12}…) — refusing, keeping the current kernel"
+      rm -f "$STAGE/$f" "$PENDING"; finish
+    fi
+  else
+    echo "note: $f staged by an older updater (no recorded hash) — verified at download only"
+  fi
+  PKGS+=("$STAGE/$f")
+done
+
+# One transaction: kernel + headers together, so DKMS (nvidia-open-dkms,
+# broadcom-wl-dkms …) builds its modules for the new kernel in the same step,
+# and mkinitcpio's hook builds /boot/initramfs-$PKGBASE.img.
+echo "installing: ${PKGS[*]##*/}"
+if ! pacman -U --noconfirm --needed "${PKGS[@]}"; then
+  echo "pacman -U FAILED — keeping the current kernel"; finish
 fi
 
-echo "rebooting…"
-systemctl reboot
+if [ -f "/boot/vmlinuz-$PKGBASE" ] && [ ! -f "/boot/initramfs-$PKGBASE.img" ]; then
+  echo "initramfs missing after install — generating it"
+  mkinitcpio -p "$PKGBASE" || true
+fi
+
+# Bootloader: the installer sets up GRUB. Make OUR kernel the top-level entry
+# (GRUB ≥ 2.12 GRUB_TOP_LEVEL) — but only when both its image and initramfs
+# exist; the stock 'linux' kernel stays one menu away under "Advanced options"
+# as the fallback if this one ever fails to boot.
+if [ -f /boot/grub/grub.cfg ] && command -v grub-mkconfig >/dev/null 2>&1; then
+  if [ -f "/boot/vmlinuz-$PKGBASE" ] && [ -f "/boot/initramfs-$PKGBASE.img" ] \
+     && [ -f /etc/default/grub ]; then
+    if grep -q '^GRUB_TOP_LEVEL=' /etc/default/grub; then
+      sed -i "s|^GRUB_TOP_LEVEL=.*|GRUB_TOP_LEVEL=\"/boot/vmlinuz-$PKGBASE\"|" /etc/default/grub
+    else
+      printf '\n# VeloGuardOS: boot %s by default; stock kernel under "Advanced options"\nGRUB_TOP_LEVEL="/boot/vmlinuz-%s"\n' \
+        "$PKGBASE" "$PKGBASE" >> /etc/default/grub
+    fi
+  fi
+  if grub-mkconfig -o /boot/grub/grub.cfg.veloguard-new; then
+    mv -f /boot/grub/grub.cfg.veloguard-new /boot/grub/grub.cfg
+    echo "GRUB menu regenerated"
+  else
+    rm -f /boot/grub/grub.cfg.veloguard-new
+    echo "grub-mkconfig FAILED — previous menu kept (new kernel not in it yet)"
+  fi
+fi
+
+rm -f "${PKGS[@]}" "$PENDING"
+echo "OK — kernel updated"
+finish

@@ -31,9 +31,27 @@ openssl dgst -sha256 -sign veloguard-release.key \
     "artifact": "https://updates.veloguardos.org/veloguard-0.2.0.tar.gz",
     "sha256": "<sha256 of the tarball>"
   },
-  "kernel": { "version": "7.2.0", "tag": "v7.2", "notes": "rebased fragments" }
+  "kernel": {
+    "version": "7.2.11",
+    "base_tag": "v7.2.11",
+    "package": "linux-veloguard-7.2.11-1-x86_64.pkg.tar.zst",
+    "artifact": "https://github.com/IVELINYTBG1/veloguard-os/releases/latest/download/linux-veloguard-7.2.11-1-x86_64.pkg.tar.zst",
+    "sha256": "<sha256 of the kernel package>",
+    "headers": {
+      "package": "linux-veloguard-headers-7.2.11-1-x86_64.pkg.tar.zst",
+      "artifact": "https://github.com/IVELINYTBG1/veloguard-os/releases/latest/download/linux-veloguard-headers-7.2.11-1-x86_64.pkg.tar.zst",
+      "sha256": "<sha256 of the headers package>"
+    }
+  }
 }
 ```
+
+The `kernel` block is what CI writes to `out/kernel-manifest.json` — paste it
+in verbatim. `headers` is optional (older manifests without it still work) but
+without it DKMS drivers (nvidia, broadcom-wl) can't build for the new kernel.
+The updater refuses a manifest whose kernel `version` is older than the one
+installed (anti-rollback), so a stale or replayed signed manifest can't
+downgrade users.
 
 The manifest is the root of trust: it's signed, and it carries the artifact's
 sha256, so the artifact is trusted transitively. Rotate the key by shipping a new
