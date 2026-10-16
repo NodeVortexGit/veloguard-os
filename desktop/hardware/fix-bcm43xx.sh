@@ -8,8 +8,9 @@ if echo "$pci_info" | grep -q "14e4:43a0" || echo "$pci_info" | grep -q "14e4:43
   # (or -lts/-zen) would boot with no Wi-Fi.
   echo "BCM4360 / BCM4331 detected — installing broadcom-wl-dkms"
   mapfile -t HEADERS < <(vg_kernel_headers)
-  if pacman -Q broadcom-wl &>/dev/null; then
-    pacman -Rdd --noconfirm broadcom-wl   # conflicts with -dkms; replaced below
-  fi
-  vg_pkg_add dkms "${HEADERS[@]}" broadcom-wl-dkms
+  vg_pkg_add dkms "${HEADERS[@]}" || exit 1
+  # broadcom-wl conflicts with -dkms. Swap in ONE transaction (--ask 4 =
+  # accept the conflict removal) so a failed install can never leave the
+  # machine with neither driver.
+  pacman -S --noconfirm --needed --ask 4 broadcom-wl-dkms
 fi

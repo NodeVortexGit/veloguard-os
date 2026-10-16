@@ -17,16 +17,16 @@ if lspci | grep -qi 'nvidia'; then
     PACKAGES=(nvidia-580xx-dkms nvidia-580xx-utils)
     LIB32=(lib32-nvidia-580xx-utils)
   fi
-  # 32-bit GL only matters for Steam/Wine and lives in [multilib], which is
-  # off by default (install-gaming.sh enables it) — never let it block the
-  # driver itself.
-  vg_multilib_enabled && PACKAGES+=("${LIB32[@]}")
-
   if [[ -z ${PACKAGES+x} ]]; then
     echo "No matching VeloGuard NVIDIA driver package for this GPU."
     echo "See: https://wiki.archlinux.org/title/NVIDIA"
     exit 0
   fi
+  # 32-bit GL only matters for Steam/Wine and lives in [multilib], which is
+  # off by default (install-gaming.sh enables it) — never let it block the
+  # driver itself. (Appended only after the no-match exit above, so it can't
+  # turn an unset PACKAGES into a set-but-empty one.)
+  if vg_multilib_enabled; then PACKAGES+=("${LIB32[@]}"); fi
 
   if ! vg_pkg_add "${PACKAGES[@]}"; then
     # Don't write the nvidia initramfs/KMS config for a driver that isn't
