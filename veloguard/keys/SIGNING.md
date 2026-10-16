@@ -35,11 +35,11 @@ openssl dgst -sha256 -sign veloguard-release.key \
     "version": "7.2.11",
     "base_tag": "v7.2.11",
     "package": "linux-veloguard-7.2.11-1-x86_64.pkg.tar.zst",
-    "artifact": "https://github.com/IVELINYTBG1/veloguard-os/releases/latest/download/linux-veloguard-7.2.11-1-x86_64.pkg.tar.zst",
+    "artifact": "https://github.com/NodeVortexGit/veloguard-os/releases/latest/download/linux-veloguard-7.2.11-1-x86_64.pkg.tar.zst",
     "sha256": "<sha256 of the kernel package>",
     "headers": {
       "package": "linux-veloguard-headers-7.2.11-1-x86_64.pkg.tar.zst",
-      "artifact": "https://github.com/IVELINYTBG1/veloguard-os/releases/latest/download/linux-veloguard-headers-7.2.11-1-x86_64.pkg.tar.zst",
+      "artifact": "https://github.com/NodeVortexGit/veloguard-os/releases/latest/download/linux-veloguard-headers-7.2.11-1-x86_64.pkg.tar.zst",
       "sha256": "<sha256 of the headers package>"
     }
   }

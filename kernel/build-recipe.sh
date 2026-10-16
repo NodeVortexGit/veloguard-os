@@ -15,7 +15,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 OUT="${OUT:-$REPO/out}"
 FRAG="$REPO/veloguard/kernel"
-RELEASE_BASE="${RELEASE_BASE:-https://github.com/IVELINYTBG1/veloguard-os/releases/latest/download}"
+RELEASE_BASE="${RELEASE_BASE:-https://github.com/NodeVortexGit/veloguard-os/releases/latest/download}"
 
 BASE="$(tr -d ' \t\n\r' < "$HERE/BASE")"     # e.g. v7.2.11
 [[ $BASE =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || {

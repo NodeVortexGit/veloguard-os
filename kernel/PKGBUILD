@@ -1,4 +1,4 @@
-# Maintainer: VeloGuardOS <https://github.com/IVELINYTBG1/veloguard-os>
+# Maintainer: VeloGuardOS <https://github.com/NodeVortexGit/veloguard-os>
 #
 # VeloGuardOS kernel = upstream Linux (pinned by ../BASE) + our config fragments
 # + our patches. Built once in CI, shipped to users as a prebuilt offline update.
@@ -20,7 +20,7 @@ pkgver=__PKGVER__
 pkgrel=1
 _srcname="linux-${pkgver}"
 pkgdesc='The VeloGuardOS Linux kernel and modules'
-url='https://github.com/IVELINYTBG1/veloguard-os'
+url='https://github.com/NodeVortexGit/veloguard-os'
 arch=(x86_64)
 license=(GPL-2.0-only)
 makedepends=(bc cpio gettext libelf openssl pahole perl python tar xz zstd kmod git)
