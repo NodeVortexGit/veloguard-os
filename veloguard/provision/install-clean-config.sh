@@ -23,8 +23,13 @@
 #
 # Safe by construction: the desktop only switches to Clean Config once every
 # REQUIRED piece has built; until then the user keeps the stock VeloGuard
-# Hyprland desktop. Albert is optional — if it fails, the launcher bind falls
-# back to fuzzel. Idempotent; re-run any time. Log: /var/log/veloguard-clean-config.log
+# Hyprland desktop. Albert is optional — if it can't be built, a tiny `albert`
+# shim opens fuzzel instead, so the config's keybinds still work unchanged.
+#
+# The config is deployed AS-IS: hyprland.conf lands byte-for-byte — every
+# keybind, monitor line, look and autostart exactly as in the repo. Nothing
+# VeloGuard is merged into it. Idempotent; re-run any time.
+# Log: /var/log/veloguard-clean-config.log
 set -euo pipefail
 
 REPO_URL="${CLEAN_CONFIG_REPO:-https://github.com/NodeVortexGit/Clean_Config_Hyperland}"
@@ -159,9 +164,10 @@ build_system() {
   echo "$rev" > "$STAMP"
   say "shell installed (revision ${rev:0:12})"
 
-  # Optional: Albert (the config's launcher). A failure here is not fatal —
-  # deploy() points the launcher bind at fuzzel instead.
-  if ! command -v albert >/dev/null; then
+  # Optional: Albert (the config's launcher). A failure here is not fatal: the
+  # shim below takes its name, so `albert toggle` (Super+Alt, $menu) and the
+  # `exec-once = albert` line keep working without editing the config.
+  if ! albert_real; then
     say "albert $ALBERT_VER (optional)…"
     if fetch "https://github.com/albertlauncher/albert/releases/download/v$ALBERT_VER/v$ALBERT_VER.tar.gz" \
          "$W/albert.tgz" sha512 "$ALBERT_SHA512" 2>/dev/null \
@@ -172,9 +178,32 @@ build_system() {
        && cmake --build "$W/albert-build" -j "$JOBS" && cmake --install "$W/albert-build"; then
       ldconfig; say "albert installed"
     else
-      say "albert did not build — the launcher bind will use fuzzel"
+      install_albert_shim
+      say "albert did not build — 'albert toggle' opens fuzzel until it does (re-run to retry)"
     fi
   fi
+}
+
+# Real Albert on PATH — the shim doesn't count, so a re-run retries the build.
+albert_real() {
+  local a; a="$(command -v albert 2>/dev/null)" || return 1
+  ! grep -q 'veloguard-albert-shim' "$a" 2>/dev/null
+}
+
+install_albert_shim() {
+  cat > /usr/local/bin/albert <<'SHIM'
+#!/bin/sh
+# veloguard-albert-shim — stands in for Albert while it can't be built, so the
+# Clean Config keybinds stay exactly as written: `albert toggle` opens fuzzel
+# (a second press closes it); a bare `albert` — the config's exec-once daemon
+# start — does nothing. A successful Albert build replaces this file.
+case "${1:-}" in
+  toggle|show) pkill -x fuzzel 2>/dev/null || exec fuzzel ;;
+  hide)        pkill -x fuzzel 2>/dev/null ;;
+esac
+exit 0
+SHIM
+  chmod 755 /usr/local/bin/albert
 }
 
 deploy() {
@@ -195,21 +224,11 @@ deploy() {
   # regenerate scheme.json from the image and clobber the dark-blue palette.
   runuser -u "$u" -- sh -c 'printf "%s" "$1" > "$2"' _ "$home/Pictures/wallhaven-p838q3.png" \
     "$home/.local/state/caelestia/wallpaper/path.txt"
+  # Super+Q runs this script — the one file the config needs to be executable.
   chmod +x "$home/.config/hypr/scripts/close-workspace.sh" 2>/dev/null || true
-
-  local conf="$home/.config/hypr/hyprland.conf"
-  # The config pins `monitor = , 1920x1080@60, auto, 1.0` (the author's
-  # panel). On any other laptop that's a wrong mode or wrong scale; on a
-  # 1080p panel `preferred, auto, auto` resolves to exactly the same thing.
-  sed -i -E 's/^monitor *= *, *1920x1080@60, *auto, *1(\.0)?$/monitor = , preferred, auto, auto   # VeloGuardOS: was 1920x1080@60 — the native mode on any laptop/' "$conf"
-  if ! command -v albert >/dev/null; then
-    sed -i -E 's/^(\$menu *= *)albert toggle/\1fuzzel/; s/^(bind *= *\$mainMod, *Alt_L, *exec, *)albert toggle/\1fuzzel/; s/^exec-once *= *albert$/# exec-once = albert   # VeloGuardOS: albert not installed — launcher is fuzzel/' "$conf"
-  fi
-  # VeloGuard guard binds — only the ones free in this config (its own Print /
-  # lock / screenshot binds are left exactly as written).
-  grep -q 'veloguard/desktop/hypr/bindings/guard-only.conf' "$conf" || \
-    printf '\n# VeloGuardOS guard (Super+Shift+G menu, +V VPN, +A agent, Super+Esc power)\nsource = /usr/share/veloguard/desktop/hypr/bindings/guard-only.conf\n' >> "$conf"
-  chown "$u:$(id -gn "$u")" "$conf"
+  # hyprland.conf is NOT edited: keybinds, monitor, look and autostart stay
+  # exactly as in the repo. (The VeloGuard guard menu is still one command
+  # away — veloguard-guard-menu — it just has no key here.)
 
   # SDDM: open the Hyprland session for this user by default.
   install -d -o sddm -g sddm /var/lib/sddm 2>/dev/null || install -d /var/lib/sddm
