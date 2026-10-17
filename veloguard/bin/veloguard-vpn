@@ -34,8 +34,12 @@
 #   3 = config has no Endpoint   4 = dead tunnel, rolled back
 #   5 = the provider's app needs you — sign in, or connect from the app itself
 #
-# Resolution order never changes for existing setups: a WireGuard profile
-# /etc/wireguard/<name>.conf always wins; the apps are used only without one.
+# Resolution: a named WireGuard profile /etc/wireguard/<name>.conf always
+# wins over an app of that name. The DEFAULT ("connect" with no name / the
+# guard's auto-protect) is whichever was connected last — an app, or the
+# WireGuard default; an app default falls back to the WireGuard default when
+# the app can't connect (no one logged in yet, not signed in). `default <name>`
+# or importing a new "veloguard" profile makes WireGuard the default again.
 #
 set -euo pipefail
 WG="${VELOGUARD_WG_DIR:-/etc/wireguard}"   # (pkexec's clean env can't override these)
@@ -193,8 +197,10 @@ app_installed() {  # $1 = provider, $2 = user (surfshark: per-user Flatpak insta
 # Surfshark's app drives NetworkManager (its Flatpak talks to NM over the
 # system bus), so its live tunnel is an active NM connection named after it.
 surfshark_active() {
-  nmcli -t -f NAME,TYPE connection show --active 2>/dev/null \
-    | awk -F: 'tolower($1) ~ /surfshark/ && $NF ~ /^(vpn|wireguard|tun)$/ {print $1}'
+  local _t c
+  while IFS=$'\t' read -r _t c; do
+    case "${c,,}" in *surfshark*) printf '%s\n' "$c" ;; esac
+  done < <(nm_vpn_active)
 }
 
 app_connect() {  # $1 = provider; exits with the codes documented at the top
@@ -259,7 +265,22 @@ app_connect() {  # $1 = provider; exits with the codes documented at the top
   esac
 }
 
-app_disconnect_all() {  # every provider app's connection; prints the ones it downed
+# Active NetworkManager VPN connections as "TYPE<TAB>name", the name
+# unescaped. TYPE is asked for FIRST: nmcli -t only escapes ':' inside the
+# name, so positional fields after a free-text NAME can be spoofed by a Wi-Fi
+# called e.g. "Cafe:vpn".
+nm_vpn_active() {
+  nmcli -t -f TYPE,NAME connection show --active 2>/dev/null | while IFS= read -r line; do
+    case "${line%%:*}" in
+      vpn|wireguard|tun) printf '%s\t%s\n' "${line%%:*}" "$(printf '%s' "${line#*:}" | sed -e 's/\\\(.\)/\1/g')" ;;
+    esac
+  done
+}
+
+# Every provider app's connection, taken down. Prints one token per line so
+# a failed WireGuard connect can bring them back (app_restore):
+#   proton | nord | nm:<NetworkManager connection name>
+app_disconnect_all() {
   local u out c
   u="$(session_user 2>/dev/null)" || u=""
   if [ -n "$u" ] && command -v protonvpn >/dev/null 2>&1; then
@@ -267,10 +288,9 @@ app_disconnect_all() {  # every provider app's connection; prints the ones it do
     if [[ $out == *"desktop app is currently running"* ]]; then
       # The CLI won't run beside the GUI — end the GUI's tunnel through
       # NetworkManager (Proton's connections are named after it).
-      while IFS= read -r c; do
-        [ -n "$c" ] && priv nmcli connection down id "$c" >/dev/null 2>&1 && echo proton
-      done < <(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null \
-                 | awk -F: 'tolower($1) ~ /proton/ && $NF ~ /^(vpn|wireguard)$/ {print $1}')
+      while IFS=$'\t' read -r _ c; do
+        case "${c,,}" in *proton*) priv nmcli connection down id "$c" >/dev/null 2>&1 && echo "nm:$c" ;; esac
+      done < <(nm_vpn_active)
     elif [[ $out == *"Status: Connected"* ]]; then
       as_user "$u" protonvpn disconnect >/dev/null 2>&1 && echo proton
     fi
@@ -280,9 +300,31 @@ app_disconnect_all() {  # every provider app's connection; prints the ones it do
     [[ $out == *"Status: Connected"* ]] && as_user "$u" nordvpn disconnect >/dev/null 2>&1 && echo nord
   fi
   while IFS= read -r c; do
-    [ -n "$c" ] && priv nmcli connection down id "$c" >/dev/null 2>&1 && echo "surfshark"
+    [ -n "$c" ] && priv nmcli connection down id "$c" >/dev/null 2>&1 && echo "nm:$c"
   done < <(surfshark_active)
   return 0
+}
+
+app_restore() {  # $1 = app_disconnect_all's tokens: bring those tunnels back
+  local t u
+  u="$(session_user 2>/dev/null)" || u=""
+  while IFS= read -r t; do
+    case "$t" in
+      proton) [ -n "$u" ] && as_user "$u" protonvpn connect >/dev/null 2>&1 ;;
+      nord)   [ -n "$u" ] && as_user "$u" nordvpn connect >/dev/null 2>&1 ;;
+      nm:*)   priv nmcli connection up id "${t#nm:}" >/dev/null 2>&1 ;;
+    esac || true
+  done <<< "$1"
+}
+
+# A VPN already carries the traffic: the default route leaves through a
+# WireGuard/tun device. (Not just "some tunnel exists" — a mesh VPN like
+# Tailscale/NetBird/ZeroTier is a tunnel too, but doesn't protect browsing.)
+vpn_active() {
+  local dev
+  dev="$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')"
+  [ -n "$dev" ] || return 1
+  ip -d link show dev "$dev" 2>/dev/null | grep -qE '^[[:space:]]+(wireguard|tun)( |$)'
 }
 
 app_cmd() {  # veloguard-vpn app <provider> install|open|installed
@@ -329,18 +371,19 @@ app_cmd() {  # veloguard-vpn app <provider> install|open|installed
 }
 
 wg_connect() {
-  local name="$1" ok h i
+  local name="$1" ok h i apps rc
   if ! has_endpoint "$WG/$name.conf"; then
     warn "$name.conf has no Endpoint — bringing it up would black-hole all routing; refusing"
     exit 3
   fi
   # one tunnel at a time: tear down anything active first — wg-quick tunnels
-  # and a provider app's connection alike
-  app_disconnect_all >/dev/null
+  # and a provider app's connection alike (remembered: if this tunnel can't
+  # carry traffic, the app's tunnel comes back instead of leaving no VPN)
+  apps="$(app_disconnect_all)"
   for i in $(priv wg show interfaces 2>/dev/null); do
     priv wg-quick down "$i" >/dev/null 2>&1 || true
   done
-  priv wg-quick up "$name"
+  priv wg-quick up "$name" || { rc=$?; app_restore "$apps"; exit "$rc"; }
   sleep 1.5                       # the first WireGuard handshake is async
   ok=""
   for h in 1.1.1.1 9.9.9.9; do
@@ -348,6 +391,7 @@ wg_connect() {
   done
   if [ -z "$ok" ]; then
     priv wg-quick down "$name" >/dev/null 2>&1 || true
+    app_restore "$apps"
     warn "tunnel '$name' came up but has no connectivity (dead endpoint?) — rolled back"
     exit 4
   fi
@@ -356,6 +400,24 @@ wg_connect() {
 }
 
 cmd="${1:-help}"; shift || true
+
+if [ "$(id -u)" -eq 0 ]; then
+  # One change at a time: the NM dispatcher, the login hook and the menu can
+  # all ask at once — interleaved they'd tear down each other's tunnels.
+  case "$cmd" in
+    connect|disconnect|default|import)
+      exec 9>/run/veloguard-vpn.lock
+      flock -w 120 9 || { warn "another VPN change is still running"; exit 1; } ;;
+  esac
+  # Installs that met the old bug have their default preserved as
+  # "veloguard-imported" — 18 chars, a name wg-quick refuses. Rename it once.
+  if [ -f "$WG/veloguard-imported.conf" ]; then
+    n=vg-imported; k=1
+    while [ -e "$WG/$n.conf" ]; do n="vg-imported$k"; k=$((k + 1)); done
+    mv "$WG/veloguard-imported.conf" "$WG/$n.conf"
+    say "renamed the preserved profile veloguard-imported → $n (veloguard-vpn connect $n)"
+  fi
+fi
 case "$cmd" in
   import)
     src="${1:?usage: veloguard-vpn import <wg.conf> [name]}"; name="${2:-veloguard}"
@@ -375,6 +437,8 @@ case "$cmd" in
       warn "refusing $src: $why"; exit 1
     fi
     priv install -m600 -D "$tmp" "$WG/$name.conf"
+    # A new config in the default slot is a deliberate choice of default.
+    [ "$name" = veloguard ] && priv rm -f "$DEFAULT_APP"
     say "installed $WG/$name.conf (chmod 600)"
     say "connect it:  veloguard-vpn connect $name"
     ;;
@@ -387,6 +451,11 @@ case "$cmd" in
       # default, when there is one, still protects.
       rc=0; ( app_connect "$app" ) || rc=$?
       [ "$rc" -eq 0 ] && exit 0
+      if vpn_active; then
+        # e.g. the Proton GUI is open AND connected (its CLI then refuses to
+        # run, code 5): already protected — don't swap that tunnel out.
+        say "a VPN already carries the traffic — leaving it as it is"; exit 0
+      fi
       if priv test -f "$WG/veloguard.conf"; then
         say "the $(app_label "$app") app couldn't connect (code $rc) — using the WireGuard default"
         wg_connect veloguard
@@ -404,7 +473,7 @@ case "$cmd" in
     fi
     ;;
   disconnect)
-    downed="$(app_disconnect_all | sort -u | tr '\n' ' ')"
+    downed="$(app_disconnect_all | sed 's/^nm://' | sort -u | tr '\n' ' ')"
     for i in $(priv wg show interfaces 2>/dev/null); do
       priv wg-quick down "$i" >/dev/null 2>&1 && downed+="$i "
     done
@@ -414,7 +483,10 @@ case "$cmd" in
     app_cmd "$@"
     ;;
   default)
-    set_default "${1:?usage: veloguard-vpn default <name>}"
+    name="${1:?usage: veloguard-vpn default <name>}"
+    valid_name "$name"
+    priv rm -f "$DEFAULT_APP"          # explicit: this WireGuard profile, not an app
+    set_default "$name"
     ;;
   url)
     provider_url "${1:?usage: veloguard-vpn url <provider>}" \
@@ -433,12 +505,16 @@ case "$cmd" in
   status)
     active="$(priv wg show interfaces 2>/dev/null || true)"
     if [ -n "$active" ]; then say "active tunnel(s): $active"; else say "no WireGuard tunnel up"; fi
+    wgdef=""
     if priv test -L "$WG/veloguard.conf"; then
-      say "default profile: $(basename "$(priv readlink "$WG/veloguard.conf")" .conf)"
+      wgdef="$(basename "$(priv readlink "$WG/veloguard.conf")" .conf)"
     elif priv test -f "$WG/veloguard.conf"; then
-      say "default profile: veloguard (imported file)"
-    elif app="$(default_app)"; then
-      say "default: the $(app_label "$app") app"
+      wgdef="veloguard (imported file)"
+    fi
+    if app="$(default_app)"; then
+      say "default: the $(app_label "$app") app${wgdef:+ — WireGuard '$wgdef' is the fallback (veloguard-vpn default veloguard: make it the default)}"
+    elif [ -n "$wgdef" ]; then
+      say "default profile: $wgdef"
     else
       say "no default profile — veloguard-vpn connect proton|nord|surfshark (app) or import a WireGuard config"
     fi

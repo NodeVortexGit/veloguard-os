@@ -4,4 +4,7 @@ Name=VeloGuard VPN auto-protect
 Comment=Connect your VPN app at login when this Wi-Fi isn't trusted
 Exec=/usr/local/bin/veloguard-vpn-autoprotect
 NoDisplay=true
+# Hyprland starts it from its own autostart (exec-once); under the uwsm
+# Hyprland session this entry would run it a second time.
+NotShowIn=Hyprland;
 X-GNOME-Autostart-enabled=true

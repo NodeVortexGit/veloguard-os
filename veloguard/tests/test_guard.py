@@ -137,6 +137,14 @@ class VpnApps(unittest.TestCase):
         Path(self.default_app).write_text("../../tmp/x\n")      # junk → plain WireGuard path
         self.assertEqual(self.plan(None), "[dry-run] wg-quick up veloguard")
 
+    def test_default_app_is_asked_before_the_wireguard_default(self):
+        # Both exist after an app connect: auto-protect must go through the
+        # helper (app first, WireGuard fallback), never raise WireGuard on top
+        # of the app's live tunnel.
+        Path(self.d, "veloguard.conf").write_text("[Interface]\n")
+        Path(self.default_app).write_text("proton\n")
+        self.assertEqual(self.plan(None), f"[dry-run] {executor.VPN_HELPER} connect veloguard")
+
     def test_non_app_names_never_reach_the_helper(self):
         self.assertEqual(self.plan("mullvad"), "[dry-run] wg-quick up mullvad")
 
@@ -197,8 +205,11 @@ class VpnHelperApps(unittest.TestCase):
         self.stub("flatpak", 'exit 0')
         self.stub("nmcli", 'exit 0')                         # nothing active
         self.assertEqual(self.run_vpn("connect", "surfshark").returncode, 5)
-        self.stub("nmcli", 'echo "Surfshark WireGuard:wireguard"')
+        self.stub("nmcli", 'echo "wireguard:Surfshark WireGuard"')     # -t -f TYPE,NAME
         self.assertEqual(self.run_vpn("connect", "surfshark").returncode, 0)
+        # A Wi-Fi NAMED like a tunnel is still Wi-Fi (nmcli escapes its ':').
+        self.stub("nmcli", 'echo "802-11-wireless:Surfshark\\:wireguard"')
+        self.assertEqual(self.run_vpn("connect", "surfshark").returncode, 5)
 
     def wg_setup(self, *names, up=""):
         """WireGuard profiles in the temp WG dir + stub wg/wg-quick/timeout."""
@@ -239,6 +250,43 @@ class VpnHelperApps(unittest.TestCase):
         calls = self.calls.read_text()
         self.assertIn("wg-quick down mullvad", calls)               # one tunnel at a time
         self.assertIn("wg-quick up mullvad", calls)                 # …and it came back
+
+    def test_wireguard_failure_brings_the_app_tunnel_back(self):
+        # Proton (CLI) carries the traffic; a WireGuard connect tears it down,
+        # its tunnel turns out dead → Proton must come back, not "no VPN".
+        self.wg_setup("mullvad")
+        self.stub("timeout", "exit 1")                 # the connectivity probe fails
+        self.stub("protonvpn", 'case "$1" in status) echo "Status: Connected";; esac')
+        r = self.run_vpn("connect", "mullvad")
+        self.assertEqual(r.returncode, 4, r.stderr)
+        calls = self.calls.read_text()
+        self.assertIn("protonvpn disconnect", calls)
+        self.assertIn("protonvpn connect", calls)                  # restored
+
+    def test_an_active_vpn_is_not_swapped_for_the_fallback(self):
+        # Proton GUI open and connected → its CLI refuses (code 5); the
+        # default route already leaves through a tunnel → leave it alone.
+        self.wg_setup("veloguard")
+        self.default_app.write_text("proton\n")
+        self.stub("protonvpn", 'echo "Error: Proton VPN desktop app is currently running"')
+        self.stub("ip", 'case "$*" in *"route get"*) echo "1.1.1.1 dev proton0 src 10.2.0.2";; '
+                        '*"-d link show dev proton0"*) printf "5: proton0: <POINTOPOINT>\\n    wireguard \\n";; esac')
+        r = self.run_vpn("connect")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("wg-quick up", self.calls.read_text())
+
+    def test_explicit_default_beats_the_app_default(self):
+        self.wg_setup("veloguard")
+        self.default_app.write_text("proton\n")
+        self.assertEqual(self.run_vpn("default", "veloguard").returncode, 0)
+        self.assertFalse(self.default_app.exists())
+
+    def test_stranded_long_name_is_renamed_once(self):
+        self.wg_setup()
+        (self.d / "wireguard" / "veloguard-imported.conf").write_text("[Interface]\n")
+        self.run_vpn("status")
+        self.assertTrue((self.d / "wireguard" / "vg-imported.conf").is_file())
+        self.assertFalse((self.d / "wireguard" / "veloguard-imported.conf").exists())
 
     def test_disconnect_reaches_the_apps(self):
         self.stub("protonvpn", 'case "$1" in status) echo "Status: Connected";; esac')

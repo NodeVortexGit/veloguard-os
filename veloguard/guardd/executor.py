@@ -189,12 +189,13 @@ class NftExecutor:
 
     @staticmethod
     def _app_for(target: str) -> str | None:
-        """The provider app serving `target` — only when NO WireGuard profile
-        of that name exists (a profile always wins, exactly as before)."""
-        if os.path.exists(f"{WG_DIR}/{target}.conf"):
-            return None
-        if target in APP_PROVIDERS:
-            return target
+        """The provider app serving `target`, if any.
+
+        The default ("veloguard") is whichever was connected last: when that
+        was an app, the helper connects it — and falls back to the WireGuard
+        default itself if the app can't (so both may exist; the app is asked
+        FIRST, or auto-protect would raise WireGuard on top of the app's live
+        tunnel). A named profile wins over an app of the same name."""
         if target == "veloguard":
             try:
                 with open(DEFAULT_APP_FILE) as fh:
@@ -202,7 +203,9 @@ class NftExecutor:
             except OSError:
                 return None
             return app if app in APP_PROVIDERS else None
-        return None
+        if os.path.exists(f"{WG_DIR}/{target}.conf"):
+            return None
+        return target if target in APP_PROVIDERS else None
 
     # --- VPN safety: a tunnel that can't carry traffic is worse than none ----
     @staticmethod

@@ -24,10 +24,13 @@ fi
 # NetworkManager). A plain tun device only counts when it carries the default
 # route — Tailscale, ZeroTier or a VM's tap is a tun too, and must not hide
 # the untrusted-Wi-Fi alarm.
+# Only TYPE and DEVICE are asked for — never the connection NAME: it's the
+# Wi-Fi's own name for a Wi-Fi connection, and a network called "Cafe:vpn"
+# would otherwise pass as a VPN (positional fields after free text).
 if [ -z "$vpn_iface" ] && command -v nmcli >/dev/null 2>&1; then
   egress="$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')"
-  vpn_iface="$(nmcli -t -f NAME,TYPE,DEVICE connection show --active 2>/dev/null \
-    | awk -F: -v eg="$egress" '$2 ~ /^(vpn|wireguard)$/ || ($2 == "tun" && $3 == eg && eg != "") {print $1; exit}')"
+  vpn_iface="$(nmcli -t -f TYPE,DEVICE connection show --active 2>/dev/null \
+    | awk -F: -v eg="$egress" '$1 ~ /^(vpn|wireguard)$/ || ($1 == "tun" && $2 == eg && eg != "") {print ($2 != "" ? $2 : $1); exit}')"
 fi
 
 # --- Wi-Fi: current SSID + trusted? -----------------------------------------
