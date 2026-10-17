@@ -67,11 +67,18 @@ def _configured_adapter() -> str:
 # SETUP SCREEN — first-boot wizard (a friendly front-end over use/key/model)
 # ===========================================================================
 
-_BANNER = """
-\033[1;36m┌────────────────────────────────────────────────┐
-│  VeloGuardOS  ·  setup                          │
-│  AI-first. Local-only brain. Nothing leaves.    │
-└────────────────────────────────────────────────┘\033[0m"""
+def _boxed(*lines: str) -> str:
+    """A box drawn around `lines`, its width computed from them — the old
+    hand-drawn banner had text rows one column wider than its borders, so the
+    right edge stuck out. (Every character here is single-width.)"""
+    inner = max(len(line) for line in lines) + 4
+    rows = [f"│  {line.ljust(inner - 2)}│" for line in lines]
+    return "\n".join([f"┌{'─' * inner}┐", *rows, f"└{'─' * inner}┘"])
+
+
+_BANNER = ("\n\033[1;36m"
+           + _boxed("VeloGuardOS  ·  setup", "AI-first. Local-only brain. Nothing leaves.")
+           + "\033[0m")
 
 
 def _ask(prompt: str, default: str | None = None) -> str:

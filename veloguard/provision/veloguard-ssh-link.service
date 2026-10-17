@@ -1,0 +1,40 @@
+[Unit]
+Description=VeloGuardOS headless SSH link (finds the linked computer, holds a reverse tunnel)
+Documentation=man:ssh(1)
+# Configured by the installer's Headless + "Link this machine…" choice only.
+ConditionPathExists=/etc/veloguard/ssh-link.conf
+Wants=network-online.target sshd.service
+After=network-online.target sshd.service
+
+[Service]
+Type=simple
+# The status line above the console login prompt (agetty reads /run/issue.d).
+ExecStartPre=+/usr/bin/install -d -m 0755 /run/issue.d
+ExecStartPre=+/usr/bin/ln -sfn /run/veloguard-ssh-link/status.issue /run/issue.d/50-veloguard-ssh-link.issue
+ExecStart=/opt/veloguard/provision/veloguard-ssh-link run
+# ssh runs LocalCommand (the "connected" status) through $SHELL — a dynamic
+# user's shell is nologin.
+Environment=SHELL=/bin/sh
+Restart=always
+RestartSec=10
+
+# Unprivileged and sealed: it only needs its key and outbound SSH.
+DynamicUser=yes
+StateDirectory=veloguard-ssh-link
+StateDirectoryMode=0700
+RuntimeDirectory=veloguard-ssh-link
+RuntimeDirectoryMode=0755
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

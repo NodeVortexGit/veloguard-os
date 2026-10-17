@@ -4,8 +4,15 @@ componentName: veloguardos
 welcomeStyleCalamares: true
 welcomeExpandingLogo: true
 windowExpanding: normal
-windowSize: 820px,560px
+# Room for the Desktop page's list + preview side by side.
+windowSize: 980px,660px
 windowPlacement: center
+
+# The navigation bar is QML (calamares-navigation.qml, themed): it can keep Next
+# disabled while the Desktop page's SSH-link field is invalid — notesqml pages
+# have no way to do that themselves. The sidebar stays the widget one.
+sidebar: widget
+navigation: qml
 
 strings:
     productName:         VeloGuardOS

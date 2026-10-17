@@ -4,8 +4,10 @@
 # (Global Storage `veloguard_desktop`) into the target. Runs IN the target
 # chroot, after calamares-target-net.sh gave it DNS.
 #
-#   calamares-desktop.sh <desktop> <user>
+#   calamares-desktop.sh <desktop> <user> [ssh-link]
 #   desktop: cleanconfig | hyprland | gnome | xfce | niri | i3 | cosmic | headless
+#   ssh-link: headless only — user@host[:port] the machine links to (the
+#             installer page's "Link this machine to a computer over SSH")
 #
 # Also the way to change your mind later: `sudo calamares-desktop.sh gnome you`
 # adds a desktop to a headless install (and makes it boot graphically again).
@@ -15,7 +17,7 @@
 # /var/lib/veloguard/desktop-pending for the first online boot to finish
 # (veloguard-hardware.service picks it up). All packages: official Arch repos.
 set -uo pipefail
-DE="${1:-hyprland}"; U="${2:-}"
+DE="${1:-hyprland}"; U="${2:-}"; SSH_LINK="${3:-}"
 LOG=/var/log/veloguard-install-desktop.log
 PENDING=/var/lib/veloguard/desktop-pending
 HERE="$(dirname "$(readlink -f "$0")")"
@@ -42,8 +44,53 @@ headless() {
       || echo "some desktop packages stay installed (still needed by others) — headless anyway"
   fi
   rm -f "$PENDING" /var/lib/sddm/state.conf
+  [ -n "$SSH_LINK" ] && ssh_link_setup "$SSH_LINK" "$U"
   echo "desktop step done: headless (boots to multi-user.target, text login)"
   exit 0
+}
+
+# The headless SSH link (veloguard-ssh-link): this machine's own key, the
+# link config, sshd reachable through the link only, and the service that
+# keeps searching for the computer until it answers.
+ssh_link_setup() {
+  local link="$1" u="$2" target port tport state=/var/lib/private/veloguard-ssh-link home
+  # Same rule as the installer page — it also keeps the value shell-safe.
+  if [[ ! $link =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}@[A-Za-z0-9]([A-Za-z0-9.-]{0,252}[A-Za-z0-9])?(:([0-9]{1,5}))?$ ]]; then
+    echo "SSH link: '$link' is not user@host[:port] — skipped"; return 0
+  fi
+  port="${BASH_REMATCH[3]:-22}"; target="${link%:*}"
+  [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || { echo "SSH link: bad port $port — skipped"; return 0; }
+  # A tunnel port per machine (derived from its machine-id), so several
+  # headless boxes can link to the same computer without colliding.
+  tport=$(( 22000 + 0x$(head -c 4 /etc/machine-id) % 1000 ))
+
+  install -d -m 0700 /var/lib/private "$state"
+  [ -f "$state/id_ed25519" ] || ssh-keygen -q -t ed25519 -N "" \
+      -C "veloguard-link@$(cat /etc/hostname 2>/dev/null || echo headless)" -f "$state/id_ed25519"
+  install -d -m 0755 /etc/veloguard
+  printf '# Written by the installer (headless SSH link). See: veloguard-ssh-link status\nTARGET=%s\nSSH_PORT=%s\nTUNNEL_PORT=%s\n' \
+    "$target" "$port" "$tport" > /etc/veloguard/ssh-link.conf
+
+  # sshd answers only through the link's tunnel, never on the network.
+  install -d /etc/ssh/sshd_config.d
+  cat > /etc/ssh/sshd_config.d/20-veloguard-link.conf <<'SSHD'
+# VeloGuardOS headless SSH link: sshd listens on localhost only — the linked
+# computer reaches it through the link's reverse tunnel. Delete this file to
+# also allow SSH from the local network.
+ListenAddress 127.0.0.1
+ListenAddress ::1
+PermitRootLogin no
+SSHD
+  systemctl enable sshd.service veloguard-ssh-link.service
+
+  # The how-to, where the user will look first.
+  home="$(getent passwd "$u" | cut -d: -f6)"
+  if [ -n "$home" ] && [ -d "$home" ]; then
+    printf 'This machine links itself to %s over SSH (veloguard-ssh-link.service).\n\n1. Once, let %s trust this machine:   sudo veloguard-ssh-link authorize\n2. Then, ON %s:   ssh -p %s %s@localhost\n\nStatus any time: veloguard-ssh-link status\n' \
+      "$target" "$target" "$target" "$tport" "$u" > "$home/veloguard-ssh-link.txt"
+    chown "$u:$(id -gn "$u")" "$home/veloguard-ssh-link.txt"
+  fi
+  echo "SSH link → $target (port $port); reverse tunnel on its localhost:$tport"
 }
 
 case "$DE" in

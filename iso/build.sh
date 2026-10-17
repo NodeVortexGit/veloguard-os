@@ -199,6 +199,11 @@ install -Dm644 "$REPO/veloguard/provision/veloguard-hwprobe.service" \
 ln -sf /etc/systemd/system/veloguard-hwprobe.service \
   "$PROFILE/airootfs/etc/systemd/system/multi-user.target.wants/veloguard-hwprobe.service"
 ln -sf /opt/veloguard/provision/veloguard-hwprobe "$PROFILE/airootfs/usr/local/bin/veloguard-hwprobe"
+# Headless SSH link (enabled by the installer only for Headless + "Link this
+# machine to a computer over SSH"; inert without /etc/veloguard/ssh-link.conf).
+install -Dm644 "$REPO/veloguard/provision/veloguard-ssh-link.service" \
+  "$PROFILE/airootfs/etc/systemd/system/veloguard-ssh-link.service"
+ln -sf /opt/veloguard/provision/veloguard-ssh-link "$PROFILE/airootfs/usr/local/bin/veloguard-ssh-link"
 # Hardware/driver setup (Omarchy-derived) — the installer runs it into the
 # target; this unit is the first-boot retry when the install was offline.
 install -Dm644 "$REPO/veloguard/provision/veloguard-hardware.service" \

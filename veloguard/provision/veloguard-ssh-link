@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+#
+# veloguard-ssh-link — the headless SSH link picked in the installer.
+#
+# From boot on, this machine keeps searching for the computer you named
+# (user@host[:port]) and, once it answers, holds an SSH connection to it with
+# a reverse tunnel — so from THAT computer you can always reach this one:
+#
+#     ssh -p <TUNNEL_PORT> <you>@localhost          (run on the linked computer)
+#
+# whatever address this machine got. It retries forever, with backoff.
+#
+#   veloguard-ssh-link status        where the link stands, how to reach it
+#   sudo veloguard-ssh-link authorize   let the linked computer trust this
+#                                    machine (asks for its password once)
+#   veloguard-ssh-link run           the service itself (veloguard-ssh-link.service)
+#
+# Security: the key this machine uses is added on the other side as
+#   restrict,port-forwarding,permitlisten="localhost:<port>",
+#   permitopen="127.0.0.1:9",command="false"
+# — even a stolen copy can only open that one listener: no shell, no pty, no
+# other port, and no -L pivot into that computer's network (permitopen has no
+# "none" in authorized_keys, so it may only reach the discard port). This
+# machine's own sshd only listens on localhost (reachable through the tunnel,
+# never from the network).
+set -u
+CONF=/etc/veloguard/ssh-link.conf
+STATUS_DIR=/run/veloguard-ssh-link
+STATUS="$STATUS_DIR/status.issue"
+# The service's StateDirectory (DynamicUser): /var/lib/veloguard-ssh-link is a
+# symlink into /var/lib/private/ while it runs; root can always use the latter.
+STATE=/var/lib/veloguard-ssh-link
+[ -d "$STATE" ] || STATE=/var/lib/private/veloguard-ssh-link
+KEY="$STATE/id_ed25519"
+
+conf() {  # parsed, never sourced: the value must look like an address/number
+  sed -n "s/^$1=\([A-Za-z0-9@._:-]*\)\$/\1/p" "$CONF" 2>/dev/null | head -n1
+}
+TARGET="$(conf TARGET)"; SSH_PORT="$(conf SSH_PORT)"; TUNNEL_PORT="$(conf TUNNEL_PORT)"
+SSH_PORT="${SSH_PORT:-22}"
+
+ssh_opts() {
+  printf '%s\n' -F /dev/null -i "$KEY" -p "$SSH_PORT" \
+    -o IdentitiesOnly=yes -o UserKnownHostsFile="$STATE/known_hosts" \
+    -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10
+}
+
+authline() {
+  printf 'restrict,port-forwarding,permitlisten="localhost:%s",permitopen="127.0.0.1:9",command="false" %s\n' \
+    "$TUNNEL_PORT" "$(cat "$KEY.pub")"
+}
+
+set_status() {  # shown above the console login prompt (agetty reads /run/issue.d)
+  [ -d "$STATUS_DIR" ] || return 0
+  printf 'SSH link -> %s: %s\n  From there: ssh -p %s <you>@localhost    (details: veloguard-ssh-link status)\n\n' \
+    "$TARGET" "$1" "$TUNNEL_PORT" > "$STATUS.tmp" 2>/dev/null && mv -f "$STATUS.tmp" "$STATUS"
+}
+
+run() {
+  if [ -z "$TARGET" ] || [ -z "$TUNNEL_PORT" ] || [ ! -r "$KEY" ]; then
+    echo "no SSH link configured ($CONF / $KEY)"; exit 0
+  fi
+  local delay=5 start err
+  while :; do
+    set_status "searching…"
+    start=$(date +%s)
+    # LocalCommand runs once the connection is up — that's "connected".
+    mapfile -t opts < <(ssh_opts)
+    err="$(ssh "${opts[@]}" -o BatchMode=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=3 \
+             -o ExitOnForwardFailure=yes -o PermitLocalCommand=yes \
+             -o LocalCommand="$0 mark-connected" \
+             -N -R "localhost:$TUNNEL_PORT:localhost:22" "$TARGET" 2>&1 >/dev/null)"
+    case "$err" in
+      *"Permission denied"*)
+        set_status "found it, but it doesn't trust this machine yet - log in here and run: sudo veloguard-ssh-link authorize" ;;
+      *"Host key verification failed"*|*"IDENTIFICATION HAS CHANGED"*)
+        set_status "NOT CONNECTING - its host key changed (another machine answering?). If it was reinstalled: sudo rm $STATE/known_hosts" ;;
+      *"forwarding failed"*)
+        set_status "connected, but port $TUNNEL_PORT is taken there - retrying" ;;
+    esac
+    # A link that held for a while: come back fast. Otherwise back off to 60 s.
+    if [ $(( $(date +%s) - start )) -gt 60 ]; then delay=5; else delay=$(( delay < 60 ? delay * 2 : 60 )); fi
+    sleep "$delay"
+  done
+}
+
+status() {
+  if [ -z "$TARGET" ]; then echo "No SSH link configured."; exit 0; fi
+  echo "Linked computer : $TARGET (ssh port $SSH_PORT)"
+  echo "Reach this one  : on $TARGET run   ssh -p $TUNNEL_PORT $(id -nu 2>/dev/null || echo you)@localhost"
+  echo "State           : $(head -n1 "$STATUS" 2>/dev/null | sed 's/^SSH link -> [^:]*: //' || echo 'service not running')"
+  echo "Service         : $(systemctl is-active veloguard-ssh-link.service 2>/dev/null)"
+  if [ -r "$KEY.pub" ]; then
+    echo; echo "Key line for $TARGET's ~/.ssh/authorized_keys (sudo veloguard-ssh-link authorize adds it):"
+    authline
+  else
+    echo; echo "(the key is readable by root: sudo veloguard-ssh-link status)"
+  fi
+}
+
+authorize() {
+  [ "$(id -u)" -eq 0 ] || { echo "run: sudo veloguard-ssh-link authorize" >&2; exit 1; }
+  [ -n "$TARGET" ] && [ -r "$KEY.pub" ] || { echo "no SSH link configured" >&2; exit 1; }
+  echo "Adding this machine's link key on $TARGET — you'll be asked for its password once."
+  mapfile -t opts < <(ssh_opts)
+  # POSIX sh on the far side whatever its login shell is; appends the line once.
+  # shellcheck disable=SC2016  # expanded by the REMOTE sh, not here
+  if authline | ssh "${opts[@]}" -o IdentitiesOnly=no -o BatchMode=no "$TARGET" \
+       'sh -c '\''umask 077; mkdir -p ~/.ssh; read -r l; touch ~/.ssh/authorized_keys; grep -qxF -- "$l" ~/.ssh/authorized_keys || printf "%s\n" "$l" >> ~/.ssh/authorized_keys'\'''; then
+    echo "Done — $TARGET now accepts this machine's link (for that one tunnel only)."
+    systemctl restart veloguard-ssh-link.service 2>/dev/null || true
+  else
+    echo "Couldn't add the key on $TARGET." >&2; exit 1
+  fi
+}
+
+case "${1:-status}" in
+  run)            run ;;
+  mark-connected) set_status "connected" ;;
+  status)         status ;;
+  authorize)      authorize ;;
+  *) echo "usage: veloguard-ssh-link status | authorize | run" >&2; exit 1 ;;
+esac
