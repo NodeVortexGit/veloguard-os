@@ -20,9 +20,16 @@ Rectangle {
     height: 52
     property bool blocked: false
 
+    // NEVER read Global Storage inside its changed() signal: GlobalStorage::
+    // insert() still holds its (non-recursive) mutex while it emits, value()
+    // takes the same mutex, and a same-thread Connections handler runs inside
+    // the emit — the installer would freeze on the first write from the GUI
+    // thread. Qt.callLater reads once insert() has returned (and several
+    // writes in a row coalesce into one read).
+    function refresh() { navigationBar.blocked = Global.value("veloguard_block_next") === true }
     Connections {
         target: Global
-        function onChanged() { navigationBar.blocked = Global.value("veloguard_block_next") === true }
+        function onChanged() { Qt.callLater(navigationBar.refresh) }
     }
 
     // A themed button: the primary (Next) one is filled cyan, like the theme's
@@ -34,7 +41,9 @@ Rectangle {
         leftPadding: 18; rightPadding: 18
         font.bold: primary
         contentItem: Label {
-            text: b.text
+            // Calamares' labels carry widget mnemonics ("&Next"); a Label would
+            // print the "&" — drop it, keeping a literal "&&" as "&".
+            text: b.text.replace(/&&/g, "\u0001").replace(/&/g, "").replace(/\u0001/g, "&")
             font: b.font
             color: !b.enabled ? "#4a5568" : (b.primary ? Theme.deep : Theme.fg)
             horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
