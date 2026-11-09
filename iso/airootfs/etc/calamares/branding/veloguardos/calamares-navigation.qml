@@ -37,6 +37,15 @@ Rectangle {
     component NavButton: Button {
         id: b
         property bool primary: false
+        // The "&" in Calamares' labels marks the Alt+letter shortcut (as on
+        // the stock widget buttons): the letter comes from the label itself,
+        // so it follows the installer's language.
+        readonly property string mnemonic: { const m = /&([^&])/.exec(b.text); return m ? m[1] : "" }
+        Shortcut {
+            sequence: b.mnemonic !== "" ? "Alt+" + b.mnemonic : ""
+            enabled: b.mnemonic !== "" && b.enabled && b.visible
+            onActivated: b.clicked()
+        }
         implicitHeight: 34
         leftPadding: 18; rightPadding: 18
         font.bold: primary
