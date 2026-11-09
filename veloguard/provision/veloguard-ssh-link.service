@@ -8,7 +8,8 @@ After=network-online.target sshd.service
 
 [Service]
 Type=simple
-# The status line above the console login prompt (agetty reads /run/issue.d).
+# The status line above the console login prompt (agetty ≥ 2.41 always reads
+# /run/issue.d; veloguard-ssh-link-issue.path makes it reprint on changes).
 ExecStartPre=+/usr/bin/install -d -m 0755 /run/issue.d
 ExecStartPre=+/usr/bin/ln -sfn /run/veloguard-ssh-link/status.issue /run/issue.d/50-veloguard-ssh-link.issue
 ExecStart=/opt/veloguard/provision/veloguard-ssh-link run

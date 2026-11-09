@@ -68,26 +68,31 @@ ssh_link_setup() {
   [ -f "$state/id_ed25519" ] || ssh-keygen -q -t ed25519 -N "" \
       -C "veloguard-link@$(cat /etc/hostname 2>/dev/null || echo headless)" -f "$state/id_ed25519"
   install -d -m 0755 /etc/veloguard
-  printf '# Written by the installer (headless SSH link). See: veloguard-ssh-link status\nTARGET=%s\nSSH_PORT=%s\nTUNNEL_PORT=%s\n' \
-    "$target" "$port" "$tport" > /etc/veloguard/ssh-link.conf
+  printf '# Written by the installer (headless SSH link). See: veloguard-ssh-link status\nTARGET=%s\nSSH_PORT=%s\nTUNNEL_PORT=%s\nBOX_USER=%s\n' \
+    "$target" "$port" "$tport" "$u" > /etc/veloguard/ssh-link.conf
 
   # sshd answers only through the link's tunnel, never on the network.
   install -d /etc/ssh/sshd_config.d
   cat > /etc/ssh/sshd_config.d/20-veloguard-link.conf <<'SSHD'
 # VeloGuardOS headless SSH link: sshd listens on localhost only — the linked
-# computer reaches it through the link's reverse tunnel. Delete this file to
+# computer reaches it through the link's reverse tunnel — and takes keys only
+# (`sudo veloguard-ssh-link authorize` brings that computer's public keys
+# here). Every tunnel connection arrives from 127.0.0.1, so passwords would be
+# exposed to anyone who can reach the tunnel's far end. Delete this file to
 # also allow SSH from the local network.
 ListenAddress 127.0.0.1
 ListenAddress ::1
 PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
 SSHD
-  systemctl enable sshd.service veloguard-ssh-link.service
+  systemctl enable sshd.service veloguard-ssh-link.service veloguard-ssh-link-issue.path
 
   # The how-to, where the user will look first.
   home="$(getent passwd "$u" | cut -d: -f6)"
   if [ -n "$home" ] && [ -d "$home" ]; then
-    printf 'This machine links itself to %s over SSH (veloguard-ssh-link.service).\n\n1. Once, let %s trust this machine:   sudo veloguard-ssh-link authorize\n2. Then, ON %s:   ssh -p %s %s@localhost\n\nStatus any time: veloguard-ssh-link status\n' \
-      "$target" "$target" "$target" "$tport" "$u" > "$home/veloguard-ssh-link.txt"
+    printf 'This machine links itself to %s over SSH (veloguard-ssh-link.service).\n\n1. Once, here:   sudo veloguard-ssh-link authorize\n   (check %s'"'"'s fingerprint, type its password once; its public keys are\n   copied here, since this machine'"'"'s sshd takes keys only)\n2. Then, ON %s:   ssh -p %s %s@localhost   (or port %s after an unclean drop)\n\nStatus any time: veloguard-ssh-link status\n' \
+      "$target" "${target#*@}" "$target" "$tport" "$u" "$((tport + 1000))" > "$home/veloguard-ssh-link.txt"
     chown "$u:$(id -gn "$u")" "$home/veloguard-ssh-link.txt"
   fi
   echo "SSH link → $target (port $port); reverse tunnel on its localhost:$tport"
@@ -125,6 +130,15 @@ case "$DE" in
     DE=hyprland; PKGS=(); SESSION=/usr/share/wayland-sessions/hyprland.desktop ;;
 esac
 
+# On a machine installed headless the display manager — and, for Hyprland,
+# the whole desktop stack — was removed: bring back what this desktop needs to
+# start graphically. (A no-op on a normal install: all of it is on the disc.)
+need_dm=0
+pacman -Q sddm >/dev/null 2>&1 || { PKGS+=(sddm); need_dm=1; }
+if [ "$DE" = hyprland ] && ! pacman -Q hyprland >/dev/null 2>&1 && [ -r /usr/share/veloguard/packages.desktop ]; then
+  mapfile -t -O "${#PKGS[@]}" PKGS < <(grep -vE '^\s*(#|$)' /usr/share/veloguard/packages.desktop)
+fi
+
 ok=1
 if [ ${#PKGS[@]} -gt 0 ]; then
   # Full -Syu, never -Sy: the disc's package DB is from ISO build day, and a
@@ -138,6 +152,10 @@ if [ "$DE" = cleanconfig ] && [ -n "$U" ]; then
   timeout -s INT -k 120 5000 "$HERE/install-clean-config.sh" "$U" \
     || { ok=0; echo "Clean Config build failed — VeloGuard Hyprland stays until it succeeds"; }
 fi
+
+# Done only when the desktop can actually start.
+[ -f "$SESSION" ] && pacman -Q sddm >/dev/null 2>&1 || ok=0
+[ "$ok" = 1 ] && [ "$need_dm" = 1 ] && systemctl enable sddm.service
 
 if [ "$ok" = 1 ]; then
   rm -f "$PENDING"

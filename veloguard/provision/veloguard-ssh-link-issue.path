@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the console login prompt when the SSH link's status changes
+# agetty prints its issue text once and keeps it: without a reload the prompt
+# on tty1 would show the boot-time "searching…" forever.
+
+[Path]
+PathChanged=/run/veloguard-ssh-link/status.issue
+Unit=veloguard-ssh-link-issue.service
+
+[Install]
+WantedBy=multi-user.target
