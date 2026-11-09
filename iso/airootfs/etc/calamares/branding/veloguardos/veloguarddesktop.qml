@@ -8,7 +8,9 @@
  *                         Next (notesqml pages can't block Next themselves)
  * hw.js is written at live boot by veloguard-hwprobe (a default ships here), so
  * the page can pre-select Clean Config on laptops and show what was detected.
- * Colours: theme.js (the default VeloGuard theme). Previews: DesktopPreview.qml.
+ * Colours: theme.js (the default VeloGuard theme). Previews: real screenshots in
+ * previews/<key>.jpg (see previews/README.md); DesktopPreview.qml draws a
+ * schematic for any choice that has none.
  */
 import QtQuick
 import QtQuick.Controls
@@ -152,9 +154,21 @@ Pane {
                     Layout.preferredHeight: width * 10 / 16          // 16:10, like most laptop panels
                     radius: 8; color: Theme.deep
                     border.width: 1; border.color: Theme.line
+                    // A real screenshot of the choice, as a fresh install shows it
+                    // at first login (previews/<key>.jpg, 1280×800); the drawn
+                    // schematic stands in for any choice without one.
+                    Image {
+                        id: shot
+                        anchors.fill: parent; anchors.margins: 5
+                        source: "previews/" + page.chosen + ".jpg"
+                        fillMode: Image.PreserveAspectCrop
+                        smooth: true; mipmap: true
+                        visible: status === Image.Ready
+                    }
                     DesktopPreview {
                         anchors.fill: parent; anchors.margins: 5
                         kind: page.chosen
+                        visible: shot.status !== Image.Ready
                     }
                 }
                 Label {

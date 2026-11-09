@@ -1,7 +1,7 @@
 /* VeloGuardOS — schematic previews of each desktop's default layout, for the
- * installer's Desktop page. Drawn (not screenshots), so they stay crisp at any
- * size and ship no third-party images; each mirrors what that desktop looks
- * like out of the box: where the bars/docks sit, how windows are arranged.
+ * installer's Desktop page. The page shows a real screenshot when one ships
+ * (previews/<key>.jpg); this drawing is the stand-in for any choice without
+ * one: where the bars/docks sit, how windows are arranged out of the box.
  */
 import QtQuick
 import "theme.js" as Theme
