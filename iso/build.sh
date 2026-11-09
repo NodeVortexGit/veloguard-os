@@ -288,10 +288,15 @@ install -d "$PROFILE/airootfs/usr/share/pixmaps"
 # GDM login-screen / About logo.
 "$IM" "$WALLSRC" -resize 480x \
   "$PROFILE/airootfs/usr/share/pixmaps/veloguardos.png" || echo "  (logo gen skipped)"
-# Calamares installer branding logo.
+# Calamares installer branding: the wide artwork for the welcome page, and a
+# SQUARE crop of the shield for the sidebar logo / window icon (Calamares
+# draws those square — the wide picture came out squashed). `-extent` keeps
+# it square even if the wallpaper's shape ever changes.
 install -d "$PROFILE/airootfs/etc/calamares/branding/veloguardos"
-"$IM" "$WALLSRC" -resize 320x \
+"$IM" "$WALLSRC" -resize 640x \
   "$PROFILE/airootfs/etc/calamares/branding/veloguardos/veloguard-logo.png" || true
+"$IM" "$WALLSRC" -gravity north -crop 38%x68%+0+2% +repage -resize 256x256^ -gravity center -extent 256x256 \
+  "$PROFILE/airootfs/etc/calamares/branding/veloguardos/veloguard-icon.png" || true
 
 # wifi-on-any-hardware: enable the boot-time autodetect service, and stock the
 # offline driver depot (broadcom-wl can't be preinstalled — its blacklists

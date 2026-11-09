@@ -1,7 +1,8 @@
 ---
 componentName: veloguardos
 
-welcomeStyleCalamares: true
+# (the welcome page is our own welcomeq.qml — "Welcome to VeloGuardOS")
+welcomeStyleCalamares: false
 welcomeExpandingLogo: true
 windowExpanding: normal
 # Room for the Desktop page's list + preview side by side.
@@ -26,9 +27,12 @@ strings:
     supportUrl:          https://github.com/NodeVortexGit/veloguard-os
     releaseNotesUrl:     https://github.com/NodeVortexGit/veloguard-os
 
+# productLogo/productIcon are drawn SQUARE (the sidebar logo at 80×80): a
+# square crop of the shield, so it isn't squashed; the wide artwork is the
+# welcome page's picture. Both generated from the wallpaper by iso/build.sh.
 images:
-    productLogo:         "veloguard-logo.png"
-    productIcon:         "veloguard-logo.png"
+    productLogo:         "veloguard-icon.png"
+    productIcon:         "veloguard-icon.png"
     productWelcome:      "veloguard-logo.png"
 
 slideshow:               "show.qml"
