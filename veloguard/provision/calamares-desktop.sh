@@ -104,7 +104,8 @@ case "$DE" in
   gnome)
     PKGS=(gnome-shell gnome-session gnome-settings-daemon gnome-control-center gnome-keyring
           nautilus gnome-console gnome-text-editor gnome-system-monitor gnome-calculator
-          gnome-disk-utility gnome-tweaks loupe papers gvfs xdg-desktop-portal-gnome)
+          gnome-disk-utility gnome-tweaks loupe papers gvfs xdg-desktop-portal-gnome
+          gnome-backgrounds)
     SESSION=/usr/share/wayland-sessions/gnome.desktop ;;
   xfce)
     PKGS=(xfce4 xfce4-whiskermenu-plugin xfce4-pulseaudio-plugin xfce4-screenshooter
@@ -130,11 +131,21 @@ case "$DE" in
     DE=hyprland; PKGS=(); SESSION=/usr/share/wayland-sessions/hyprland.desktop ;;
 esac
 
+# The display manager. SDDM launches every session here, Wayland and X11 —
+# except GNOME's needs: GNOME Shell builds its lock screen only when GDM
+# answers on the system bus (LoginManager.canLock()), so under SDDM a GNOME
+# session cannot lock at all — not on Super+L, not on suspend ("Screen Lock
+# disabled: Screen Locking requires the GNOME display manager"). GNOME gets
+# GDM; a machine already on GDM keeps it (GDM launches the other sessions too,
+# and going back to SDDM would take GNOME's lock away again).
+DM=sddm
+if [ "$DE" = gnome ] || [ "$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null)" = /usr/lib/systemd/system/gdm.service ]; then
+  DM=gdm
+fi
 # On a machine installed headless the display manager — and, for Hyprland,
 # the whole desktop stack — was removed: bring back what this desktop needs to
 # start graphically. (A no-op on a normal install: all of it is on the disc.)
-need_dm=0
-pacman -Q sddm >/dev/null 2>&1 || { PKGS+=(sddm); need_dm=1; }
+pacman -Q "$DM" >/dev/null 2>&1 || PKGS+=("$DM")
 if [ "$DE" = hyprland ] && ! pacman -Q hyprland >/dev/null 2>&1 && [ -r /usr/share/veloguard/packages.desktop ]; then
   mapfile -t -O "${#PKGS[@]}" PKGS < <(grep -vE '^\s*(#|$)' /usr/share/veloguard/packages.desktop)
 fi
@@ -154,24 +165,41 @@ if [ "$DE" = cleanconfig ] && [ -n "$U" ]; then
 fi
 
 # Done only when the desktop can actually start.
-[ -f "$SESSION" ] && pacman -Q sddm >/dev/null 2>&1 || ok=0
-[ "$ok" = 1 ] && [ "$need_dm" = 1 ] && systemctl enable sddm.service
+[ -f "$SESSION" ] && pacman -Q "$DM" >/dev/null 2>&1 || ok=0
 
 if [ "$ok" = 1 ]; then
   rm -f "$PENDING"
+  # --force re-points the display-manager.service alias (SDDM -> GDM for
+  # GNOME). Calamares' services-systemd then fails to enable sddm over GDM's
+  # alias — logged, not fatal (not mandatory) — and GDM stays.
+  systemctl enable --force "$DM.service"
 else
+  # Offline: the fallback session needs no change of display manager.
+  DM="unchanged"
   printf '%s %s\n' "$DE" "$U" > "$PENDING"; SESSION=/usr/share/wayland-sessions/hyprland.desktop
 fi
 
 # A desktop means a graphical boot — also after `headless` was picked before.
 [ -f "$SESSION" ] && systemctl set-default graphical.target
 
-# Default session for this user in SDDM (the one display manager for every
-# choice: it launches Wayland and X11 sessions alike).
+# Default session for this user, for whichever display manager runs: SDDM
+# remembers the last session; GDM reads the user's AccountsService record
+# (keys updated in place — GNOME keeps the user's language and icon there).
 if [ -n "$U" ] && [ -f "$SESSION" ]; then
   install -d /var/lib/sddm
   printf '[Last]\nSession=%s\nUser=%s\n' "$SESSION" "$U" > /var/lib/sddm/state.conf
   chown -R sddm:sddm /var/lib/sddm 2>/dev/null || true
+  if pacman -Q gdm >/dev/null 2>&1; then
+    as=/var/lib/AccountsService/users/$U; stype=wayland
+    case "$SESSION" in */xsessions/*) stype=x11 ;; esac
+    install -d -m 0700 /var/lib/AccountsService/users
+    [ -f "$as" ] || printf '[User]\nSystemAccount=false\n' > "$as"
+    for kv in "Session=$(basename "$SESSION" .desktop)" "SessionType=$stype"; do
+      if grep -q "^${kv%%=*}=" "$as"; then sed -i "s|^${kv%%=*}=.*|$kv|" "$as"
+      else sed -i "/^\[User\]/a $kv" "$as"; fi
+    done
+    chmod 0600 "$as"
+  fi
 fi
-echo "desktop step done: $DE (session $(basename "$SESSION"), complete=$ok)"
+echo "desktop step done: $DE (session $(basename "$SESSION"), display manager $DM, complete=$ok)"
 exit 0
