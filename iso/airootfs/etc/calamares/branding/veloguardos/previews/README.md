@@ -9,11 +9,12 @@ stock everything else. 1280×800 (16:10, the preview pane's shape), JPEG with
 `veloguarddesktop.qml` shows `previews/<key>.jpg` for the selected choice and
 falls back to the drawn schematic in `DesktopPreview.qml` when a file is
 missing, so a desktop without a screenshot never shows a broken image (still
-drawn for now: Clean Config, i3, COSMIC).
+drawn for now: Clean Config, COSMIC).
 
 | file | how it was captured |
 |------|---------------------|
 | `hyprland.jpg` | installed VeloGuardOS VM (QEMU, KMS), Hyprland 0.57.2: a headless install with VeloGuard Hyprland added later (`calamares-desktop.sh hyprland`), SDDM login, two terminals |
+| `i3.jpg` | same VM, `calamares-desktop.sh i3`, SDDM login (real Xorg); i3's first-run config wizard answered with its defaults (Enter, Enter); three terminals opened through i3 |
 | `gnome.jpg` | Arch build chroot, `gnome-shell --headless` (software rendering), first-login overview |
 | `xfce.jpg` | Arch build chroot, Xvfb + `startxfce4`, a Thunar window opened |
 | `niri.jpg` | Arch build chroot, niri nested on Xvfb, two terminals (Super+T) |
