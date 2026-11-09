@@ -25,6 +25,9 @@ StateDirectory=veloguard-ssh-link
 StateDirectoryMode=0700
 RuntimeDirectory=veloguard-ssh-link
 RuntimeDirectoryMode=0755
+# Keep the status file across restarts (authorize restarts the service): its
+# removal made the console reprint a banner with no link line in between.
+RuntimeDirectoryPreserve=restart
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

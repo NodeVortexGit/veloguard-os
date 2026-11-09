@@ -63,7 +63,11 @@ authline() {
 
 set_status() {  # $1 = state text, $2 = the tunnel port in use (shown above the console login)
   [ -d "$STATUS_DIR" ] || return 0
-  printf 'SSH link -> %s: %s\n  From there: ssh -p %s %s@localhost    (details: veloguard-ssh-link status)\n\n' \
+  # agetty --reload reprints the issue text WITHOUT clearing, so every state
+  # change stacked another banner on tty1. Clear, then redo the distro line
+  # with agetty's own escapes (\S{PRETTY_NAME} \r (\l), as at boot): one
+  # clean banner with the current state.
+  printf '\033[H\033[2J\\S{PRETTY_NAME} \\r (\\l)\n\nSSH link -> %s: %s\n  From there: ssh -p %s %s@localhost    (details: veloguard-ssh-link status)\n\n' \
     "$TARGET" "$1" "${2:-$TUNNEL_PORT}" "${BOX_USER:-<you>}" > "$STATUS.tmp" 2>/dev/null \
     && mv -f "$STATUS.tmp" "$STATUS"
 }
@@ -114,7 +118,7 @@ run() {
 status() {
   if [ -z "$TARGET" ]; then echo "No SSH link configured."; exit 0; fi
   local line port
-  line="$( [ -r "$STATUS" ] && head -n1 "$STATUS" | sed 's/^SSH link -> [^:]*: //')"
+  line="$( [ -r "$STATUS" ] && sed -n 's/^SSH link -> [^:]*: //p' "$STATUS" | head -n1)"
   port="$( [ -r "$STATUS" ] && sed -n 's/.*ssh -p \([0-9]*\) .*/\1/p' "$STATUS" | head -n1)"
   echo "Linked computer : $TARGET (ssh port $SSH_PORT)"
   echo "Reach this one  : on $TARGET run   ssh -p ${port:-$TUNNEL_PORT} ${BOX_USER:-${SUDO_USER:-$(id -nu)}}@localhost"
