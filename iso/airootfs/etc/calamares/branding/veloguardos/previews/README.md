@@ -9,10 +9,11 @@ stock everything else. 1280×800 (16:10, the preview pane's shape), JPEG with
 `veloguarddesktop.qml` shows `previews/<key>.jpg` for the selected choice and
 falls back to the drawn schematic in `DesktopPreview.qml` when a file is
 missing, so a desktop without a screenshot never shows a broken image (still
-drawn for now: VeloGuard Hyprland, Clean Config, i3, COSMIC).
+drawn for now: Clean Config, i3, COSMIC).
 
 | file | how it was captured |
 |------|---------------------|
+| `hyprland.jpg` | installed VeloGuardOS VM (QEMU, KMS), Hyprland 0.57.2: a headless install with VeloGuard Hyprland added later (`calamares-desktop.sh hyprland`), SDDM login, two terminals |
 | `gnome.jpg` | Arch build chroot, `gnome-shell --headless` (software rendering), first-login overview |
 | `xfce.jpg` | Arch build chroot, Xvfb + `startxfce4`, a Thunar window opened |
 | `niri.jpg` | Arch build chroot, niri nested on Xvfb, two terminals (Super+T) |
@@ -35,7 +36,8 @@ Hyprland BSD-3-Clause, Alacritty Apache-2.0/MIT). Wallpapers visible:
 - COSMIC default background "Orion Nebula" (heic0601a) — NASA, ESA,
   M. Robberto (STScI/ESA) and the Hubble Space Telescope Orion Treasury
   Project Team, CC BY 4.0, via `cosmic-wallpapers`.
-- VeloGuard and Clean Config wallpapers — this repository / NodeVortex.
+- VeloGuardOS default wallpaper — this repository
+  (`iso/airootfs/usr/share/backgrounds/veloguard/default.png`).
 
 Retake a screenshot when that desktop's look changes (new upstream release
 or a change to what `calamares-desktop.sh` installs).
