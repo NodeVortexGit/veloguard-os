@@ -6,7 +6,7 @@ The full source is fetched from kernel.org at build time; here we keep only:
 
 | File | What it is |
 |------|------------|
-| `BASE` | the upstream release tag we're pinned to (e.g. `v7.2.11`). The agent bumps this. A point release `vX.Y.Z` is fetched from the stable tree (where every security backport lands); a bare `vX.Y` from torvalds/linux. |
+| `BASE` | the upstream release tag we're pinned to (e.g. `v7.3.3`). The agent bumps this. A point release `vX.Y.Z` is fetched from the stable tree (where every security backport lands); a bare `vX.Y` from torvalds/linux. |
 | `PKGBUILD` | Arch recipe: upstream source + our config + our patches → `linux-veloguard` + `linux-veloguard-headers` (DKMS: nvidia, broadcom-wl) |
 | `build-recipe.sh` | CI entry point: stages context, runs `makepkg`, emits both packages + sha256s + the manifest block |
 | `audit-config.sh` | fails the build if any requested `CONFIG_` symbol didn't survive `olddefconfig` (Kconfig drops unmet dependencies silently) |
@@ -41,9 +41,9 @@ our patches+config┘                         │
 ## Bump the kernel by hand (what the agent automates)
 
 ```bash
-echo v7.2.12 > kernel/BASE       # pin a newer upstream stable tag
+echo v7.3.4 > kernel/BASE        # pin a newer upstream stable tag
 # (add/refresh kernel/patches/*.patch if our deltas need rebasing)
-git commit -am "kernel: bump to v7.2.12"   # CI builds; publish both packages, then sign the manifest
+git commit -am "kernel: bump to v7.3.4"    # CI builds; publish both packages, then sign the manifest
 ```
 
 ## Why the config looks the way it does

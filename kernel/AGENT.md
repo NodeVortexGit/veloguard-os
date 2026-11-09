@@ -5,7 +5,7 @@ still builds with our delta, and ship it** — the "compare our kernel to Linus'
 agent. It works on the *delta* in this repo; it never commits kernel source.
 
 ## Inputs it reads
-- `kernel/BASE` — the upstream release tag we're pinned to (e.g. `v7.2.11`).
+- `kernel/BASE` — the upstream release tag we're pinned to (e.g. `v7.3.3`).
 - `kernel/patches/*.patch` — our source deltas (none yet).
 - `../veloguard/kernel/veloguardos-*.config` — our config fragments.
 - Linus's tree at `/home/nodevortex/VeloGuardOS` (`origin = torvalds/linux`)

@@ -17,10 +17,10 @@ OUT="${OUT:-$REPO/out}"
 FRAG="$REPO/veloguard/kernel"
 RELEASE_BASE="${RELEASE_BASE:-https://github.com/NodeVortexGit/veloguard-os/releases/latest/download}"
 
-BASE="$(tr -d ' \t\n\r' < "$HERE/BASE")"     # e.g. v7.2.11
+BASE="$(tr -d ' \t\n\r' < "$HERE/BASE")"     # e.g. v7.3.3
 [[ $BASE =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || {
-  echo "kernel/BASE must be a release tag like v7.2 or v7.2.11 (got '$BASE')" >&2; exit 1; }
-KVER="${BASE#v}"                              # 7.2.11
+  echo "kernel/BASE must be a release tag like v7.3 or v7.3.3 (got '$BASE')" >&2; exit 1; }
+KVER="${BASE#v}"                              # 7.3.3
 # Point releases (vX.Y.Z — where every security backport lands) exist only in
 # the stable tree; torvalds/linux carries just mainline vX.Y. Mirrors on
 # GitHub so CI never depends on kernel.org git hosting.
