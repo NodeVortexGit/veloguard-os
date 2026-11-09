@@ -7,6 +7,9 @@ Wants=network-online.target
 After=network-online.target
 ConditionPathExists=|!/var/lib/veloguard/.hardware-done
 ConditionPathExists=|/var/lib/veloguard/desktop-pending
+# Never on the live ISO (booted with archisobasedir=): it would -Syu the whole
+# live system into the small RAM overlay. The installer runs it for the target.
+ConditionKernelCommandLine=!archisobasedir
 
 [Service]
 Type=oneshot

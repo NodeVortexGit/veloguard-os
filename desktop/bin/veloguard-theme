@@ -65,7 +65,23 @@ set_theme() {
   command -v notify-send >/dev/null 2>&1 && notify-send "VeloGuard" "Theme: $name" || true
 }
 
+# mako configs seeded from the old skel end with the theme include INSIDE the
+# [urgency=critical] section, where mako rejects it and exits — no
+# notifications at all. Move it to the global section. Only that exact shipped
+# layout (our comment + include as the last two lines) is touched.
+fix_mako_include() {
+  local f="$HOME/.config/mako/config" inc='include=~/.config/veloguard/current/mako.ini'
+  [ -f "$f" ] || return 0
+  # shellcheck disable=SC2016  # the backticks are literal text in the file
+  [ "$(tail -n2 "$f" | head -n1)" = '# Theme colors (created/updated by `veloguard-theme`)' ] || return 0
+  [ "$(tail -n1 "$f")" = "$inc" ] || return 0
+  head -n -2 "$f" | sed -e '/[^[:space:]]/,$!d' | awk -v inc="$inc" \
+    '!done && /^\[/ { print inc; print ""; done = 1 } { print } END { if (!done) print inc }' > "$f.vgtmp" \
+    && mv -f "$f.vgtmp" "$f"
+}
+
 ensure_theme() {
+  fix_mako_include
   if [ -d "$CURRENT" ] || { [ -L "$CURRENT" ] && [ -e "$CURRENT" ]; }; then
     return 0                                   # already points somewhere valid
   fi
