@@ -26,9 +26,11 @@
 # Hyprland desktop. Albert is optional — if it can't be built, a tiny `albert`
 # shim opens fuzzel instead, so the config's keybinds still work unchanged.
 #
-# The config is deployed AS-IS: hyprland.conf lands byte-for-byte — every
-# keybind, monitor line, look and autostart exactly as in the repo. Nothing
-# VeloGuard is merged into it. Idempotent; re-run any time.
+# The config is deployed AS-IS: the repo's Hyprland config lands byte-for-byte
+# — every keybind, monitor line, look and autostart exactly as in the repo.
+# Nothing VeloGuard is merged into it. Hyprland 0.57+ reads only
+# .config/hypr/hyprland.lua: until the repo ships one, VeloGuard Hyprland stays
+# and Clean Config stays pending (exit 1). Idempotent; re-run any time.
 # Log: /var/log/veloguard-clean-config.log
 set -euo pipefail
 
@@ -216,15 +218,35 @@ SHIM
   chmod 755 /usr/local/bin/albert
 }
 
+hypr_version() { pacman -Q hyprland 2>/dev/null | awk '{print $2}'; }
+# Hyprland 0.57 and later read only the Lua config.
+hypr_lua_only() {
+  local v; v="$(hypr_version)"; [ -n "$v" ] || return 1
+  [ "$(vercmp "$v" 0.57)" -ge 0 ]
+}
+
 deploy() {
   local u="$1" home; home="$(getent passwd "$u" | cut -d: -f6)"
   local dot="$SRC/shell/dotfiles"
   [ -d "$dot" ] || die "dotfiles missing in $SRC/shell"
   say "deploying dotfiles for $u → $home"
+  # Hyprland 0.57 reads ONLY ~/.config/hypr/hyprland.lua (hyprland.conf support
+  # was removed). A Clean Config without a hyprland.lua can't start there: keep
+  # the account on VeloGuard Hyprland and leave Clean Config pending — the
+  # first-online-boot retry re-clones the repo, so a Lua port is picked up by
+  # itself. (Before 0.57 the .conf is what runs, as always.)
+  if [ ! -f "$dot/.config/hypr/hyprland.lua" ] && hypr_lua_only; then
+    die "this Clean Config has no .config/hypr/hyprland.lua, and Hyprland $(hypr_version) reads only Lua — VeloGuard Hyprland stays until the repo ships a Lua config"
+  fi
   # Keep the stock VeloGuard Hyprland config one rename away.
   if [ -f "$home/.config/hypr/hyprland.conf" ] && [ ! -f "$home/.config/hypr/hyprland.conf.veloguard-default" ] \
      && ! grep -q 'caelestia:islandToggle' "$home/.config/hypr/hyprland.conf"; then
     runuser -u "$u" -- cp -a "$home/.config/hypr/hyprland.conf" "$home/.config/hypr/hyprland.conf.veloguard-default"
+  fi
+  if [ -f "$dot/.config/hypr/hyprland.lua" ] && [ -f "$home/.config/hypr/hyprland.lua" ] \
+     && [ ! -f "$home/.config/hypr/hyprland.lua.veloguard-default" ] \
+     && grep -q '/usr/share/veloguard/desktop/hypr/init.lua' "$home/.config/hypr/hyprland.lua"; then
+    runuser -u "$u" -- cp -a "$home/.config/hypr/hyprland.lua" "$home/.config/hypr/hyprland.lua.veloguard-default"
   fi
   runuser -u "$u" -- mkdir -p "$home/.config" "$home/.local" "$home/Pictures" "$home/.local/state/caelestia/wallpaper"
   runuser -u "$u" -- cp -r "$dot/.config/." "$home/.config/"
@@ -236,9 +258,10 @@ deploy() {
     "$home/.local/state/caelestia/wallpaper/path.txt"
   # Super+Q runs this script — the one file the config needs to be executable.
   chmod +x "$home/.config/hypr/scripts/close-workspace.sh" 2>/dev/null || true
-  # hyprland.conf is NOT edited: keybinds, monitor, look and autostart stay
-  # exactly as in the repo. (The VeloGuard guard menu is still one command
-  # away — veloguard-guard-menu — it just has no key here.)
+  # The repo's Hyprland config (hyprland.lua, or hyprland.conf before 0.57) is
+  # NOT edited: keybinds, monitor, look and autostart stay exactly as in the
+  # repo. (The VeloGuard guard menu is still one command away —
+  # veloguard-guard-menu — it just has no key here.)
 
   # SDDM: open the Hyprland session for this user by default.
   install -d -o sddm -g sddm /var/lib/sddm 2>/dev/null || install -d /var/lib/sddm

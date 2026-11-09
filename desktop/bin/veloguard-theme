@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # veloguard-theme — switch the VeloGuardOS desktop theme. A theme is a directory
-# under /usr/share/veloguard/themes/<name> holding hyprland.conf, waybar.css,
-# mako.ini, alacritty.toml, hyprlock.conf and gum.env.conf. The active theme is
+# under /usr/share/veloguard/themes/<name> holding hyprland.lua (Hyprland 0.55+;
+# hyprland.conf for older ones), waybar.css, mako.ini, alacritty.toml,
+# hyprlock.conf and gum.env.conf. The active theme is
 # the symlink ~/.config/veloguard/current -> that directory; the desktop configs
 # source files through that symlink, so switching is just a relink + reload.
 #

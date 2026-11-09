@@ -24,7 +24,7 @@ choice="$(printf '%s\n' "$entries" | menu "⏻ Power")" || exit 0
 case "$choice" in
   Lock)      loginctl lock-session ;;
   Suspend)   systemctl suspend ;;
-  "Log out") uwsm stop 2>/dev/null || hyprctl dispatch exit ;;
+  "Log out") uwsm stop 2>/dev/null || veloguard-hypr exit ;;
   Reboot)    systemctl reboot ;;
   "Shut down") systemctl poweroff ;;
   "Reboot & Update"*)

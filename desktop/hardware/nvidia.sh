@@ -54,4 +54,13 @@ cursor {
   no_hardware_cursors = true
 }
 EOF
+  # The same for Hyprland 0.55+ (Lua config; 0.57 reads nothing else) -
+  # loaded by /usr/share/veloguard/desktop/hypr/init.lua when present.
+  cat > /usr/share/veloguard/desktop/hypr/nvidia.lua <<'EOF'
+-- Loaded on NVIDIA hardware (by init.lua when present)
+hl.env("LIBVA_DRIVER_NAME", "nvidia")
+hl.env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
+hl.env("NVD_BACKEND", "direct")
+hl.config({ cursor = { no_hardware_cursors = true } })
+EOF
 fi

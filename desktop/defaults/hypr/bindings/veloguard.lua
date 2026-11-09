@@ -1,0 +1,16 @@
+-- VeloGuardOS additions to the default bindings — Lua port of veloguard.conf.
+hl.bind("SUPER + SHIFT + G", hl.dsp.exec_cmd("veloguard-guard-menu"),     { description = "Guard menu" })
+hl.bind("SUPER + SHIFT + V", hl.dsp.exec_cmd("veloguard-guard-menu vpn"), { description = "VPN" })
+hl.bind("SUPER + SHIFT + A", hl.dsp.exec_cmd("veloguard-agent"),          { description = "AI agent" })
+hl.bind("SUPER + ESCAPE",    hl.dsp.exec_cmd("veloguard-powermenu"),      { description = "Power menu" })
+hl.bind("XF86PowerOff",      hl.dsp.exec_cmd("veloguard-powermenu"),      { locked = true })
+hl.bind("SUPER + SHIFT + T", hl.dsp.exec_cmd("veloguard-theme menu"),     { description = "Theme" })
+hl.bind("SUPER + SHIFT + SPACE", hl.dsp.exec_cmd("pkill -SIGUSR1 waybar"), { description = "Toggle top bar" })
+hl.bind("SUPER + CTRL + L",  hl.dsp.exec_cmd("loginctl lock-session"),    { description = "Lock" })
+hl.bind("SUPER + CTRL + V",  hl.dsp.exec_cmd("cliphist list | wofi --dmenu | cliphist decode | wl-copy"),
+        { description = "Clipboard history" })
+hl.bind("PRINT",         hl.dsp.exec_cmd('grim -g "$(slurp)" - | wl-copy && notify-send -u low "Screenshot copied"'))
+hl.bind("SHIFT + PRINT", hl.dsp.exec_cmd('grim - | wl-copy && notify-send -u low "Screenshot copied"'))
+hl.bind("SUPER + PRINT", hl.dsp.exec_cmd("pkill hyprpicker || hyprpicker -a"), { description = "Colour picker" })
+hl.bind("SUPER + SHIFT + BACKSPACE", hl.dsp.exec_cmd("makoctl dismiss --all"))
+hl.bind("SUPER + CTRL + BACKSPACE",  hl.dsp.exec_cmd("makoctl mode -t do-not-disturb"))

@@ -254,7 +254,7 @@ RemainAfterExit=yes
 # No idle lock / screen-off for the live account: it has no password to type,
 # and an install (Clean Config builds for ~15 min) runs unattended — a lock
 # then just hides the installer. Installed systems keep the normal hypridle.
-ExecStart=/usr/bin/bash -c 'useradd -m -G wheel -s /usr/bin/bash veloguard && passwd -d veloguard && printf "general {\\n    after_sleep_cmd = hyprctl dispatch dpms on\\n}\\n" > /home/veloguard/.config/hypr/hypridle.conf && chown veloguard:veloguard /home/veloguard/.config/hypr/hypridle.conf'
+ExecStart=/usr/bin/bash -c 'useradd -m -G wheel -s /usr/bin/bash veloguard && passwd -d veloguard && printf "general {\\n    after_sleep_cmd = veloguard-hypr dpms on\\n}\\n" > /home/veloguard/.config/hypr/hypridle.conf && chown veloguard:veloguard /home/veloguard/.config/hypr/hypridle.conf'
 [Install]
 WantedBy=multi-user.target
 UNIT
