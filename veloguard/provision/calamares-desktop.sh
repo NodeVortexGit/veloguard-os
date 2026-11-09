@@ -122,7 +122,8 @@ case "$DE" in
     SESSION=/usr/share/xsessions/i3.desktop ;;
   cosmic)
     PKGS=(cosmic-session cosmic-comp cosmic-panel cosmic-launcher cosmic-files
-          cosmic-terminal cosmic-settings cosmic-store xdg-desktop-portal-cosmic)
+          cosmic-terminal cosmic-settings cosmic-store xdg-desktop-portal-cosmic
+          cosmic-wallpapers)
     SESSION=/usr/share/wayland-sessions/cosmic.desktop ;;
   headless)
     headless ;;
