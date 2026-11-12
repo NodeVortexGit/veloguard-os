@@ -34,6 +34,15 @@ hl.window_rule({
   center = true,
 })
 
+-- The installer (live ISO): a fixed-size 980x660 window. Tiled next to another
+-- window it got half the screen and its pages were clipped.
+hl.window_rule({
+  name = "float-installer",
+  match = { class = "^(io.calamares.calamares)$" },
+  float = true,
+  center = true,
+})
+
 -- Apply default opacity after apps have had a chance to opt out
 hl.window_rule({
   name = "default-opacity",
