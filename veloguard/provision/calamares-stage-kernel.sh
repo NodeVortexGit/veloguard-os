@@ -10,6 +10,19 @@ set -e
 ROOT="${1:?target root path required}"
 [ -d "$ROOT" ] || { echo "ERROR: target root '$ROOT' is not a directory" >&2; exit 1; }
 
+# First choice: the copy the `linux` package keeps beside its modules, already
+# in the unpacked target. It needs no boot medium — when the live ISO boots
+# from a USB stick with enough RAM, archiso copies the image to RAM and
+# UNMOUNTS the stick (copytoram=auto), so /run/archiso/bootmnt is gone — and it
+# is by construction the kernel those modules belong to.
+for d in "$ROOT"/usr/lib/modules/*/; do
+  if [ -f "$d/vmlinuz" ] && [ "$(cat "$d/pkgbase" 2>/dev/null)" = linux ]; then
+    install -Dm644 "$d/vmlinuz" "$ROOT/boot/vmlinuz-linux"
+    echo "staged kernel: $d/vmlinuz -> $ROOT/boot/vmlinuz-linux"
+    exit 0
+  fi
+done
+
 for src in /run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux \
            /run/archiso/bootmnt/arch/boot/*/vmlinuz-linux \
            /run/archiso/airootfs/boot/vmlinuz-linux; do

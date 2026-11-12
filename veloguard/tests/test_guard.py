@@ -408,11 +408,31 @@ class Updater(unittest.TestCase):
         self.assertTrue(all(len(p["sha256"]) == 64 for p in pend["packages"]))
 
     def test_tampered_artifact_is_refused_and_not_left_behind(self):
-        with mock.patch.object(updater, "local_kernel_version", return_value="none"):
+        with mock.patch.object(updater, "local_kernel_version", return_value="none"), \
+             mock.patch.object(updater, "running_kernel_version", return_value="6.0"):
             with self.assertRaises(updater.UpdateError):
                 updater.stage_kernel(self.manifest(tamper=True), dry_run=False)
         self.assertEqual(list((self.d / "stage").glob("*.pkg.tar.zst")), [])
         self.assertFalse((self.d / "stage" / "pending.json").exists())
+
+    def test_fresh_install_is_not_offered_a_kernel_older_than_the_running_one(self):
+        # stock distro kernel 7.3.3 running, none of ours installed, manifest still says 7.0
+        with mock.patch.object(updater, "local_kernel_version", return_value="none"), \
+             mock.patch.object(updater, "running_kernel_version", return_value="7.3.3"):
+            mf = self.manifest("7.0")
+            self.assertFalse(updater.check(mf)["domains"]["kernel"]["update_available"])
+            out = updater.stage_kernel(mf, dry_run=False)
+            self.assertIn("not staged", out)
+            self.assertFalse((self.d / "stage" / "pending.json").exists())
+            # ...but a newer one of ours is still offered and staged
+            mf = self.manifest("7.3.4")
+            self.assertTrue(updater.check(mf)["domains"]["kernel"]["update_available"])
+            self.assertIn("staged kernel v7.3.4", updater.stage_kernel(mf, dry_run=False))
+
+    def test_running_kernel_version_parses_distro_release_strings(self):
+        for rel, want in (("7.3.3-arch1-1", "7.3.3"), ("7.2.0-veloguard", "7.2"), ("6.18.44-fc-v378", "6.18.44")):
+            with mock.patch.object(updater.os, "uname", return_value=mock.Mock(release=rel)):
+                self.assertEqual(updater.running_kernel_version(), want)
 
     def test_downgrade_refused(self):
         with mock.patch.object(updater, "local_kernel_version", return_value="7.3.1"):
@@ -420,7 +440,8 @@ class Updater(unittest.TestCase):
                 updater.stage_kernel(self.manifest("7.2.11"), dry_run=True)
 
     def test_package_name_cannot_traverse(self):
-        with mock.patch.object(updater, "local_kernel_version", return_value="none"):
+        with mock.patch.object(updater, "local_kernel_version", return_value="none"), \
+             mock.patch.object(updater, "running_kernel_version", return_value="6.0"):
             with self.assertRaises(updater.UpdateError):
                 updater.stage_kernel(self.manifest(name="../../etc/x.pkg.tar.zst"), dry_run=True)
 

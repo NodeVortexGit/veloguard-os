@@ -151,6 +151,24 @@ def sha256(path: Path) -> str:
 
 # --- check (read-only; safe for the agent to poll) -------------------------
 
+def running_kernel_version() -> str:
+    """Numeric version of the kernel that is running, whoever built it
+    ('7.3.3-arch1-1' → '7.3.3'); '' when it can't be read."""
+    m = re.match(r"\d+(?:\.\d+){1,2}", os.uname().release)
+    return _norm_kver(m.group(0)) if m else ""
+
+
+def _older_than_running(ver: str) -> bool:
+    """A fresh install runs the distribution's kernel and has none of ours
+    (local_kernel_version() == 'none'), so the installed-version downgrade
+    check has nothing to compare against. The floor is then the RUNNING
+    kernel: a manifest that still names an older release (not re-signed since
+    — it offered 7.0 to machines running 7.3) must not put users on a kernel
+    older than the one they boot today."""
+    run = running_kernel_version()
+    return bool(ver and run) and _vercmp(ver, run) < 0
+
+
 def check(source: str | None = None) -> dict:
     m = load_manifest(source)
     out = {"verified": True, "domains": {}}
@@ -162,7 +180,8 @@ def check(source: str | None = None) -> dict:
     out["domains"]["kernel"] = {
         "current": cur_k, "latest": lat_k,
         "update_available": bool(lat_k) and (
-            cur_k == "none" or _vercmp(str(lat_k), cur_k) > 0)}
+            not _older_than_running(str(lat_k)) if cur_k == "none"
+            else _vercmp(str(lat_k), cur_k) > 0)}
     return out
 
 
@@ -303,6 +322,10 @@ def stage_kernel(source: str | None = None, dry_run: bool = True) -> str:
             # must not walk users back onto a kernel with fixed CVEs.
             raise UpdateError(f"manifest offers {ver} but {cur} is installed — "
                               "downgrade refused")
+    if cur == "none" and _older_than_running(ver):
+        (KERNEL_STAGE / "pending.json").unlink(missing_ok=True)   # un-offer a stale stage
+        return (f"manifest offers kernel {ver}, older than the running "
+                f"{running_kernel_version()} — not staged")
     pending = kernel_update_pending()
     if pending and pending.get("version") == ver and all(
             (KERNEL_STAGE / it["package"]).is_file() for it in items):

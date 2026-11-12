@@ -19,6 +19,27 @@ if ! command -v calamares >/dev/null 2>&1; then
   notify-send "VeloGuardOS installer" "$msg" 2>/dev/null || echo "$msg" >&2
   exit 1
 fi
+# Where the system image is: on the boot medium, or in RAM when archiso copied
+# it there and unmounted the medium (copytoram=auto: USB boot with enough
+# RAM). Calamares' unpackfs has one fixed path and runs AFTER partitioning —
+# a wrong path would wipe the disk and then fail. Fix the path up front, and
+# refuse to start the installer when the image can't be found at all.
+SFS=""
+for p in /run/archiso/bootmnt/arch/x86_64/airootfs.sfs /run/archiso/copytoram/airootfs.sfs; do
+  [ -f "$p" ] && { SFS="$p"; break; }
+done
+if [ -z "$SFS" ]; then
+  msg="Can't find the system image (airootfs.sfs) on the boot medium or in RAM — not starting the installer. Was the USB stick removed?"
+  notify-send -u critical "VeloGuardOS installer" "$msg" 2>/dev/null; echo "$msg" >&2
+  exit 1
+fi
+UNPACK=/etc/calamares/modules/unpackfs.conf
+if ! grep -qF "source: $SFS" "$UNPACK" 2>/dev/null; then
+  sudo -n sed -i "s|^\\([[:space:]]*- source:\\).*airootfs\\.sfs.*|\\1 $SFS|" "$UNPACK" 2>/dev/null \
+    || pkexec sed -i "s|^\\([[:space:]]*- source:\\).*airootfs\\.sfs.*|\\1 $SFS|" "$UNPACK"
+  grep -qF "source: $SFS" "$UNPACK" || { echo "could not point the installer at $SFS" >&2; exit 1; }
+fi
+
 if sudo -n true 2>/dev/null; then
   # -u SUDO_*: sudo would otherwise hand SUDO_USER=veloguard (the live
   # account) to every install step, and the target has no such user.
