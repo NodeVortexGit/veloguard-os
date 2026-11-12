@@ -2,10 +2,11 @@
 -- Derived from Omarchy config/hypr/input.conf (MIT).
 hl.config({
   input = {
-    -- Multiple layouts switchable with Left Alt + Right Alt:
+    -- The keyboard layout comes from the system setting (the installer's
+    -- Keyboard page; change it with `sudo localectl set-x11-keymap us,bg`).
+    -- To override it here, e.g. two layouts switched with both Alt keys:
     -- kb_layout = "us,bg",
     -- kb_options = "grp:alts_toggle,compose:caps",
-    kb_options = "compose:caps",
     repeat_rate = 40,
     repeat_delay = 250,
     numlock_by_default = true,

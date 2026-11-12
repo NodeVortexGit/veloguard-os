@@ -43,6 +43,7 @@ ntfs-3g
 # (releng usually carries these; explicit so the GUI installer can't regress)
 grub
 efibootmgr
+os-prober
 dosfstools
 
 # guard runtime

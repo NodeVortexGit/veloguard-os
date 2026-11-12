@@ -24,6 +24,7 @@ local function load(path, optional)
 end
 
 load(dir .. "envs.lua")
+load(dir .. "keyboard.lua")   -- the installer's / localectl's keyboard layout
 load(dir .. "autostart.lua")
 load(dir .. "looknfeel.lua")
 load(dir .. "windows.lua")

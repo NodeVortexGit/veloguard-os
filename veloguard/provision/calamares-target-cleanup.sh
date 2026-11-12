@@ -84,6 +84,17 @@ if pacman-key --init >/dev/null 2>&1 && pacman-key --populate archlinux >/dev/nu
 else
   echo "WARNING: pacman keyring setup failed — run: sudo pacman-key --init && sudo pacman-key --populate" >&2
 fi
+# 10. dual boot: GRUB ships with other-OS detection off, so an existing
+#     Windows (or other Linux) never appeared in the boot menu and looked
+#     wiped. Turn it on (os-prober is on the disc); grub-mkconfig runs later.
+if command -v os-prober >/dev/null 2>&1 && [ -f /etc/default/grub ]; then
+  if grep -q '^#\?GRUB_DISABLE_OS_PROBER=' /etc/default/grub; then
+    sed -i 's/^#\?GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub
+  else
+    printf '\nGRUB_DISABLE_OS_PROBER=false\n' >> /etc/default/grub
+  fi
+fi
+
 # pacman-key leaves a gpg-agent running inside the target; it would keep the
 # target busy and make the final unmount fail.
 gpgconf --homedir /etc/pacman.d/gnupg --kill all >/dev/null 2>&1 || true
