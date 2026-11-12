@@ -1,11 +1,15 @@
-# VeloGuardOS desktop stack — Omarchy-style Hyprland, all from OFFICIAL Arch repos
-# (no AUR, so the ISO stays hermetic). Single source of truth: appended to the
+# VeloGuardOS desktop stack — Omarchy-style Hyprland, from OFFICIAL Arch repos plus
+# our own compositor package (no AUR, so the ISO stays hermetic). Single source of truth: appended to the
 # archiso package list by iso/build.sh and installed by
 # veloguard/provision/install-desktop.sh. One package per line; '#' comments and
 # blank lines are ignored by consumers.
 
-# Wayland compositor + session
-hyprland
+# Wayland compositor + session. The compositor is NodeVortex's Hyprland fork
+# (Hyprland 0.57 + a cursor per pointer device): it provides/conflicts
+# `hyprland`, comes from the local [veloguard] repo (iso/pkgs, recipe in
+# iso/pkgs-src/hyprland-multicursor) and is kept on installed systems under
+# /usr/share/veloguard/repo for re-installs.
+hyprland-multicursor
 hyprlock
 hypridle
 hyprpicker

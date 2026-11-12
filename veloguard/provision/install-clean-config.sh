@@ -96,7 +96,12 @@ build_system() {
   say "official packages…"
   # -Syu, never -S: if the install's driver step couldn't finish its full
   # upgrade, a bare -S would put new packages on top of old libraries.
-  pacman -Syu --noconfirm --needed "${OFFICIAL[@]}"
+  # Skip what is already satisfied by a PROVIDER: VeloGuard's compositor is
+  # hyprland-multicursor (provides + conflicts hyprland) — asking pacman for
+  # `hyprland` itself would try to swap the stock one in and abort.
+  local want=() p
+  for p in "${OFFICIAL[@]}"; do pacman -T "$p" >/dev/null 2>&1 || want+=("$p"); done
+  pacman -Syu --noconfirm --needed "${want[@]}"
 
   local W; W="$(mktemp -d "$SRC/build.XXXXXX")"; trap 'rm -rf "$W"' RETURN
 
@@ -218,7 +223,7 @@ SHIM
   chmod 755 /usr/local/bin/albert
 }
 
-hypr_version() { pacman -Q hyprland 2>/dev/null | awk '{print $2}'; }
+hypr_version() { { pacman -Q hyprland-multicursor 2>/dev/null || pacman -Q hyprland 2>/dev/null; } | awk '{print $2}'; }
 # Hyprland 0.57 and later read only the Lua config.
 hypr_lua_only() {
   local v; v="$(hypr_version)"; [ -n "$v" ] || return 1

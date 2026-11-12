@@ -8,6 +8,7 @@ Operation = Install
 Operation = Upgrade
 Type = Package
 Target = hyprland
+Target = hyprland-multicursor
 
 [Action]
 Description = VeloGuardOS: moving Hyprland accounts to the Lua config...

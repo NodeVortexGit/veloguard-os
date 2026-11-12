@@ -147,12 +147,29 @@ fi
 # the whole desktop stack — was removed: bring back what this desktop needs to
 # start graphically. (A no-op on a normal install: all of it is on the disc.)
 pacman -Q "$DM" >/dev/null 2>&1 || PKGS+=("$DM")
-if [ "$DE" = hyprland ] && ! pacman -Q hyprland >/dev/null 2>&1 && [ -r /usr/share/veloguard/packages.desktop ]; then
+if [ "$DE" = hyprland ] && ! pacman -T hyprland >/dev/null 2>&1 && [ -r /usr/share/veloguard/packages.desktop ]; then
   mapfile -t -O "${#PKGS[@]}" PKGS < <(grep -vE '^\s*(#|$)' /usr/share/veloguard/packages.desktop)
 fi
 
+# Our own packages (the hyprland-multicursor compositor) are not in Arch's
+# repos: they install from the copies kept in /usr/share/veloguard/repo, and
+# BEFORE the rest — xdg-desktop-portal-hyprland depends on `hyprland`, and
+# pacman would pull the stock compositor in to satisfy it.
+LOCAL=(); REST=()
+for p in "${PKGS[@]}"; do
+  f="$(ls /usr/share/veloguard/repo/"$p"-[0-9]*.pkg.tar.zst 2>/dev/null | tail -n1)"
+  if [ -n "$f" ]; then LOCAL+=("$f"); else REST+=("$p"); fi
+done
+PKGS=("${REST[@]}")
+
 ok=1
-if [ ${#PKGS[@]} -gt 0 ]; then
+if [ ${#LOCAL[@]} -gt 0 ]; then
+  if ! { timeout -s INT -k 120 5000 pacman -Syu --noconfirm \
+         && pacman -U --noconfirm --needed "${LOCAL[@]}"; }; then
+    ok=0; echo "local package install failed (offline?) — VeloGuard Hyprland stays the session for now"
+  fi
+fi
+if [ "$ok" = 1 ] && [ ${#PKGS[@]} -gt 0 ]; then
   # Full -Syu, never -Sy: the disc's package DB is from ISO build day, and a
   # bare -Sy + -S is a partial upgrade (new packages against old libraries).
   # Inside Calamares' 5400 s deadline, stopped cleanly (see calamares-hardware.sh).

@@ -57,6 +57,18 @@ else
   exit 1
 fi
 
+# 3.6 our compositor (hyprland-multicursor, packages.desktop) comes from that
+#     local repo too. Keep its package ON the image as well: an installed
+#     system has no [veloguard] repo, and the installer's "add a desktop
+#     later" path (and a headless install changing its mind) reinstalls it
+#     from /usr/share/veloguard/repo.
+if ! ls "$REPO/iso/pkgs/"hyprland-multicursor-[0-9]*.pkg.tar.zst >/dev/null 2>&1; then
+  echo "ERROR: iso/pkgs has no hyprland-multicursor package — build it from iso/pkgs-src/hyprland-multicursor (see its PKGBUILD)" >&2
+  exit 1
+fi
+install -d "$PROFILE/airootfs/usr/share/veloguard/repo"
+cp "$REPO/iso/pkgs/"hyprland-multicursor-[0-9]*.pkg.tar.zst "$PROFILE/airootfs/usr/share/veloguard/repo/"
+
 # 4. our tree into the live root
 mkdir -p "$PROFILE/airootfs/opt"
 cp -r "$REPO/veloguard"      "$PROFILE/airootfs/opt/veloguard"
