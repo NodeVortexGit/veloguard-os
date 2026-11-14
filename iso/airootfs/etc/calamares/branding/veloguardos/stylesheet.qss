@@ -97,3 +97,12 @@ QScrollBar::handle { background: #2b3b5c; border-radius: 5px; min-height: 24px; 
 QScrollBar::handle:hover { background: #33ccff; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+
+/* ── partition legend (under the Current/After disk bars) ─────────────── */
+/* Calamares paints the partition names in hard-coded black and the sizes in
+   hard-coded grey, on this widget's background — unreadable on navy. Give
+   the legend the light strip those colours were written for. */
+PartitionLabelsView {
+    background-color: #e6edf7;
+    border-radius: 4px;
+}
