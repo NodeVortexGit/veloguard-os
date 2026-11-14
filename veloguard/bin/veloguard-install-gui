@@ -40,6 +40,24 @@ if ! grep -qF "source: $SFS" "$UNPACK" 2>/dev/null; then
   grep -qF "source: $SFS" "$UNPACK" || { echo "could not point the installer at $SFS" >&2; exit 1; }
 fi
 
+# A failed installer run can leave helpers alive inside the old target (seen:
+# pacman's gpg-agent after a step timed out). Calamares unmounts lazily, so
+# such a process keeps the target partition busy and the NEXT run dies with
+# "failed to create a partition table". On the live system, any process whose
+# root is not the live root is such a leftover: stop them before starting.
+if sudo -n true 2>/dev/null; then
+  sudo -n /bin/sh -c '
+    live=$(stat -L -c %d /proc/1/root) || exit 0
+    for p in /proc/[0-9]*; do
+      d=$(stat -L -c %d "$p/root" 2>/dev/null) || continue
+      [ "$d" = "$live" ] || kill -9 "${p#/proc/}" 2>/dev/null
+    done
+    for m in /tmp/calamares-root-*; do
+      [ -d "$m" ] && { umount -R "$m" 2>/dev/null; rmdir "$m" 2>/dev/null; }
+    done
+    exit 0'
+fi
+
 if sudo -n true 2>/dev/null; then
   # -u SUDO_*: sudo would otherwise hand SUDO_USER=veloguard (the live
   # account) to every install step, and the target has no such user.
