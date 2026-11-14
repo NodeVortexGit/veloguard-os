@@ -25,10 +25,12 @@ warn() { printf '\033[1;33m[veloguard]\033[0m %s\n' "$*" >&2; }
 # Arch
 # ---------------------------------------------------------------------------
 do_arch() {
+  # (libva-mesa-driver / mesa-vdpau no longer exist — mesa ships VA-API itself;
+  #  naming them made the whole transaction fail with "target not found".)
   pacman -Syu --noconfirm --needed \
     linux-firmware sof-firmware \
     intel-ucode amd-ucode \
-    mesa libva-mesa-driver mesa-vdpau \
+    mesa \
     intel-media-driver libva-intel-driver \
     libva-utils vdpauinfo \
     gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly \

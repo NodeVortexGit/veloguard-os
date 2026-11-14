@@ -1,0 +1,16 @@
+# VeloGuardOS: Hyprland 0.57 reads only ~/.config/hypr/hyprland.lua (the
+# hyprlang hyprland.conf is gone). Whenever Hyprland is installed or upgraded,
+# move accounts still on VeloGuard's hyprland.conf to the Lua config before
+# their next login: otherwise Hyprland writes its own generic default and the
+# desktop loses VeloGuard's binds, bar, theme and the user's own settings.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = hyprland
+Target = hyprland-multicursor
+
+[Action]
+Description = VeloGuardOS: moving Hyprland accounts to the Lua config...
+When = PostTransaction
+Exec = /usr/local/bin/veloguard-hypr-migrate --all

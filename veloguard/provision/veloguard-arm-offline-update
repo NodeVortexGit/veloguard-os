@@ -4,4 +4,7 @@
 # kernel update so it installs on the next reboot". Runs as root via pkexec; the
 # polkit rule 49-veloguard-offline-update.rules lets the active local user do it
 # without a password. The single fixed path is what makes that rule safe.
-exec veloguard-update kernel --arm
+#
+# Absolute path, never a PATH lookup: pkexec resets PATH to a safe default that
+# omits /usr/local/bin, so a bare `veloguard-update` was "command not found".
+exec "$(dirname "$(readlink -f "$0")")/../bin/veloguard-update" kernel --arm

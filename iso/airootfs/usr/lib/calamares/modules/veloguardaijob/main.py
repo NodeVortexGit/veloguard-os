@@ -36,13 +36,17 @@ def run():
         except Exception as e:                       # never abort the install
             libcalamares.utils.warning("veloguardaijob: %s" % e)
 
-    if provider in ("openai", "anthropic", "claude"):
-        prov = "claude" if provider == "anthropic" else "openai"
-        in_target([GUARD, "use", prov])
+    if provider in ("anthropic", "claude"):
+        # (The old mapping sent "claude" to "openai" — not a provider the guard
+        # has, so `guardd use openai` failed and the key was never stored.)
+        in_target([GUARD, "use", "claude"])
         if model:
-            in_target([GUARD, "model", prov, model])
+            in_target([GUARD, "model", "claude", model])
         if key:
-            in_target([GUARD, "key", prov, key])
+            in_target([GUARD, "key", "claude", key])
+    elif provider == "openai":
+        libcalamares.utils.warning(
+            "veloguardaijob: the guard has no OpenAI plane (mock|snn|claude|ollama)")
     elif provider == "ollama":
         in_target([GUARD, "use", "ollama"] + ([model] if model else []))
         if model:                                    # pull the model system-wide

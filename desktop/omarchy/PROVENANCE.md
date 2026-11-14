@@ -25,7 +25,9 @@ it is rebranded to VeloGuard. This is a derivative work, not a verbatim copy.
 | `desktop/defaults/hypr/envs.conf` | `default/hypr/envs.conf` | Kept; theme `source` repointed to VeloGuard theme path |
 | `desktop/defaults/hypr/windows.conf` | `default/hypr/windows.conf` | Adapted window rules |
 | `desktop/defaults/hypr/autostart.conf` | `default/hypr/autostart.conf` | Rewired: hypridle/mako/waybar/swaybg kept; `omarchy-*` autostarts → VeloGuard equivalents + `veloguard-firstboot` |
-| `desktop/skel/.config/hypr/*` | `config/hypr/*` | User-override stubs + top-level `hyprland.conf` that sources VeloGuard defaults |
+| `desktop/skel/.config/hypr/*` | `config/hypr/*` | User-override stubs + top-level `hyprland.lua` that loads VeloGuard defaults |
+| `desktop/defaults/hypr/*.lua`, `bindings/*.lua` | the `.conf` rows above | Lua ports for Hyprland 0.55+ (0.57 reads only Lua); same settings, binds and rules |
+| `desktop/defaults/hypr/legacy-skel/*.conf` | `config/hypr/*` | The pre-Lua per-user stubs, kept for `veloguard-hypr-migrate` |
 | `desktop/skel/.config/waybar/config.jsonc` | `config/waybar/config.jsonc` | Omarchy-script modules removed; **`custom/guard`** module added; stock modules kept |
 | `desktop/skel/.config/waybar/style.css` | `config/waybar/style.css` | Kept; theme import repointed; `.guard-*` classes added |
 | `desktop/skel/.config/mako/config` | `default/mako/core.ini` + `default/themed/mako.ini.tpl` | Merged into one config; theme colors inlined via VeloGuard theme |

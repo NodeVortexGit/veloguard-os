@@ -14,10 +14,14 @@ HOME_DIR="${VELOGUARD_HOME:-/opt/veloguard}"
 
 command -v nmcli >/dev/null || { echo "nmcli not found" >&2; exit 0; }
 
-# Active Wi-Fi line: ACTIVE:SSID:SECURITY
-line="$(nmcli -t -f ACTIVE,SSID,SECURITY dev wifi 2>/dev/null | awk -F: '$1=="yes"{print; exit}')"
-ssid="$(printf '%s' "$line" | cut -d: -f2)"
-sec="$(printf '%s' "$line" | cut -d: -f3)"
+# Active Wi-Fi line: ACTIVE:SECURITY:SSID. SSID goes LAST and is unescaped:
+# `nmcli -t` writes a literal ':' in an SSID as '\:' (and '\' as '\\'), so
+# splitting on ':' mis-parsed e.g. "Cafe:Guest" — and SSIDs are chosen by
+# whoever runs the access point. SECURITY never contains ':'.
+line="$(nmcli -t -f ACTIVE,SECURITY,SSID dev wifi 2>/dev/null | awk -F: '$1=="yes"{print; exit}')"
+rest="${line#yes:}"
+sec="${rest%%:*}"
+ssid="$(printf '%s' "${rest#*:}" | sed -e 's/\\\(.\)/\1/g')"
 [ -n "$ssid" ] || exit 0   # not on Wi-Fi (e.g. wired) — nothing to do
 
 cd "$HOME_DIR"

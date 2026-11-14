@@ -84,7 +84,7 @@ def execute_tool(name: str, args: dict, *, apply: bool = False,
     except ValueError as e:
         return {"ok": False, "status": "invalid", "error": str(e)}
 
-    engine = PolicyEngine.load(DEFAULT_POLICY_PATH)
+    engine = PolicyEngine.shared(DEFAULT_POLICY_PATH)
     decision = engine.evaluate(action)
     base = {"source": source, "tool": name, "params": action.params,
             "verdict": decision.verdict.value, "reason": decision.reason,

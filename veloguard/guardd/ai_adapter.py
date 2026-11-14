@@ -240,6 +240,11 @@ class ClaudeAdapter(AIAdapter):
         if not self.api_key:
             raise RuntimeError(
                 "no Claude API key — run `guardd setup` or set ANTHROPIC_API_KEY")
+        # Current Claude models think adaptively by default and thinking tokens
+        # count against max_tokens — callers asking for 8 (voice YES/NO) or 300
+        # (intent JSON) could get an empty answer back. Floor the budget; the
+        # model still stops as soon as it has answered.
+        max_tokens = max(int(max_tokens), 2048)
         body = json.dumps({
             "model": self.model, "max_tokens": max_tokens, "system": system,
             "messages": [{"role": "user", "content": user}],

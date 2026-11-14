@@ -84,13 +84,24 @@ from older builds is simply ignored.
 
 ## What the guard guarantees today
 
-- **Protected ranges** — the AI can never block loopback, RFC1918, or
-  link-local. It cannot be talked into locking you out of your own box.
+- **Protected ranges** — the AI can never block loopback, RFC1918, CGNAT,
+  link-local, IPv6 ULA, multicast or broadcast. It cannot be talked into
+  locking you out of your own box.
+- **Shaped targets** — process targets are a PID or an exact process name,
+  VPN profiles a WireGuard interface name: no paths, patterns or options ever
+  reach the root-run `pkill`/`rm`/`wg-quick` (tests: `tests/test_guard.py`).
+- **Fail closed** — `sandbox_run` refuses to run at all when no isolation
+  layer is installed, instead of running the command unsandboxed.
 - **Consent gate** — state-changing actions stop and ask, unless `--yes`.
-- **Rate limit** — sliding window caps runaway action storms.
-- **Audit** — every decision (allowed, denied, aborted) is one JSON line in
-  `audit.log`.
+- **Rate limit** — sliding window caps runaway action storms (shared across
+  calls in long-running servers: MCP, agent loop, honeypot).
+- **Audit** — every decision (allowed, denied, aborted, failed) is one JSON
+  line in `audit.log`: `/var/log/veloguard/audit.log` for root, the checkout's
+  `audit.log` in a dev tree, else `~/.config/veloguard/audit.log`
+  (`$VELOGUARD_AUDIT_LOG` overrides).
 - **Dry-run default** — nothing touches the kernel without `--apply`.
+
+Run the guard's regression tests: `python3 -m unittest discover -s tests -v`.
 
 ## Layout
 

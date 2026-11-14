@@ -14,4 +14,8 @@ for vendor in "${!VULKAN_DRIVERS[@]}"; do
   fi
 done
 
-((${#PACKAGES[@]})) && vg_pkg_add "${PACKAGES[@]}"
+# `if`, not `((n)) && …`: as the last command that returned 1 with nothing to
+# add (a VM, an NVIDIA-only box) and logged a false "vulkan.sh exited non-zero".
+if ((${#PACKAGES[@]})); then
+  vg_pkg_add "${PACKAGES[@]}"
+fi

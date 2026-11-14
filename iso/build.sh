@@ -20,7 +20,7 @@ cp -r /usr/share/archiso/configs/releng "$PROFILE"
 # 2. our identity
 sed -i 's/^iso_name=.*/iso_name="veloguardos"/'  "$PROFILE/profiledef.sh"
 sed -i 's/^iso_label=.*/iso_label="VELOGUARDOS"/' "$PROFILE/profiledef.sh"
-sed -i 's#^iso_publisher=.*#iso_publisher="VeloGuardOS <https://github.com/IVELINYTBG1/veloguard-os>"#' "$PROFILE/profiledef.sh"
+sed -i 's#^iso_publisher=.*#iso_publisher="VeloGuardOS <https://github.com/NodeVortexGit/veloguard-os>"#' "$PROFILE/profiledef.sh"
 sed -i 's/^iso_application=.*/iso_application="VeloGuardOS Live"/' "$PROFILE/profiledef.sh"
 # boot-menu titles: "Arch Linux" -> "VeloGuardOS"
 sed -i 's/Arch Linux/VeloGuardOS/g' "$PROFILE"/syslinux/*.cfg 2>/dev/null || true
@@ -32,7 +32,10 @@ sed -i 's/Arch Linux/VeloGuardOS/g' "$PROFILE"/efiboot/loader/entries/*.conf 2>/
 #     fragility), so it's deferred. Post-boot one-liner to add it:
 #       git clone https://aur.archlinux.org/yay.git && (cd yay && makepkg -si)
 
-# 3. extra packages (appended to releng's base list)
+# 3. extra packages (appended to releng's base list). Calamares is the ONE
+#    installer: releng's archinstall goes (the "advanced, terminal" launcher
+#    that ran it is gone too).
+sed -i '/^archinstall$/d' "$PROFILE/packages.x86_64"
 cat "$REPO/iso/packages.extra" >> "$PROFILE/packages.x86_64"
 
 # 3a. the Omarchy-style Hyprland desktop stack (single source of truth). Strip
@@ -48,8 +51,23 @@ if ls "$REPO/iso/pkgs/"*.pkg.tar.zst >/dev/null 2>&1; then
   printf 'calamares\nckbcomp\n' >> "$PROFILE/packages.x86_64"
   echo "  local repo: $(ls "$REPO/iso/pkgs/"*.pkg.tar.zst | xargs -n1 basename | tr '\n' ' ')"
 else
-  echo "  (no iso/pkgs packages — GUI installer will be MISSING from this image)"
+  # With archinstall gone, an image without Calamares can't install at all —
+  # fail the build instead of shipping one.
+  echo "ERROR: no iso/pkgs/*.pkg.tar.zst — the installer (calamares) would be missing" >&2
+  exit 1
 fi
+
+# 3.6 our compositor (hyprland-multicursor, packages.desktop) comes from that
+#     local repo too. Keep its package ON the image as well: an installed
+#     system has no [veloguard] repo, and the installer's "add a desktop
+#     later" path (and a headless install changing its mind) reinstalls it
+#     from /usr/share/veloguard/repo.
+if ! ls "$REPO/iso/pkgs/"hyprland-multicursor-[0-9]*.pkg.tar.zst >/dev/null 2>&1; then
+  echo "ERROR: iso/pkgs has no hyprland-multicursor package — build it from iso/pkgs-src/hyprland-multicursor (see its PKGBUILD)" >&2
+  exit 1
+fi
+install -d "$PROFILE/airootfs/usr/share/veloguard/repo"
+cp "$REPO/iso/pkgs/"hyprland-multicursor-[0-9]*.pkg.tar.zst "$PROFILE/airootfs/usr/share/veloguard/repo/"
 
 # 4. our tree into the live root
 mkdir -p "$PROFILE/airootfs/opt"
@@ -73,6 +91,8 @@ cp -r "$REPO/desktop/defaults" "$PROFILE/airootfs/usr/share/veloguard/desktop"
 cp -r "$REPO/desktop/themes"   "$PROFILE/airootfs/usr/share/veloguard/themes"
 cp -r "$REPO/desktop/hardware" "$PROFILE/airootfs/usr/share/veloguard/hardware"
 cp -r "$REPO/desktop/agents"   "$PROFILE/airootfs/usr/share/veloguard/agents"
+# The desktop package set, so a headless install knows what to remove.
+install -Dm644 "$REPO/desktop/packages.desktop" "$PROFILE/airootfs/usr/share/veloguard/packages.desktop"
 cp -r "$REPO/desktop/skel/.config/." "$PROFILE/airootfs/etc/skel/.config/"
 for b in "$REPO/desktop/bin/"*; do
   install -Dm755 "$b" "$PROFILE/airootfs/usr/local/bin/$(basename "$b")"
@@ -101,9 +121,12 @@ ln -sfn /usr/share/veloguard/themes/veloguard \
   printf ')\n'
 } >> "$PROFILE/profiledef.sh"
 
-# 6. guard tools on PATH (the launcher cd's into /opt/veloguard)
+# 6. guard tools on PATH (the launcher cd's into /opt/veloguard).
+#    veloguard-install-gui is what the "Install VeloGuardOS" menu entry runs —
+#    it was missing here, so that entry pointed at a file that didn't exist
+#    and the installer could not be started from the desktop at all.
 mkdir -p "$PROFILE/airootfs/usr/local/bin"
-for b in veloguard veloguard-install veloguard-vpn veloguard-vpn-ui \
+for b in veloguard veloguard-install veloguard-install-gui veloguard-vpn veloguard-vpn-ui \
          veloguard-wifi-doctor veloguard-wifi-autodetect veloguard-wifi-trust \
          veloguard-update veloguard-netwatch veloguard-bulgarian-mode veloguard-mcp; do
   ln -sf "/opt/veloguard/bin/$b" "$PROFILE/airootfs/usr/local/bin/$b"
@@ -151,6 +174,17 @@ done
 # there's no real WWAN here, so masking it is pure win for Wi-Fi stability.
 ln -sf /usr/lib/systemd/system/NetworkManager-wait-online.service \
   "$PROFILE/airootfs/etc/systemd/system/network-online.target.wants/NetworkManager-wait-online.service"
+# Wi-Fi auto-protect: the NM dispatcher hook runs veloguard-netwatch on every
+# Wi-Fi "up" (open/untrusted → VPN). It was never installed, so the feature
+# never ran. NM only runs root-owned, non-world-writable hooks (mode set in
+# file_permissions below), and its dispatcher is D-Bus-activated through the
+# dbus-org alias that exists only once the unit is enabled.
+install -Dm755 "$REPO/veloguard/provision/veloguard-nm-dispatcher" \
+  "$PROFILE/airootfs/etc/NetworkManager/dispatcher.d/90-veloguard"
+ln -sf /usr/lib/systemd/system/NetworkManager-dispatcher.service \
+  "$PROFILE/airootfs/etc/systemd/system/dbus-org.freedesktop.nm-dispatcher.service"
+printf 'file_permissions+=(["/etc/NetworkManager/dispatcher.d/90-veloguard"]="0:0:755")\n' \
+  >> "$PROFILE/profiledef.sh"
 # Bluetooth: enable the service (and dbus-activated for GNOME's BT panel).
 ln -sf /usr/lib/systemd/system/bluetooth.service \
   "$PROFILE/airootfs/etc/systemd/system/bluetooth.target.wants/bluetooth.service"
@@ -170,8 +204,21 @@ install -Dm644 "$REPO/veloguard/provision/veloguard-privacy.timer" \
   "$PROFILE/airootfs/etc/systemd/system/veloguard-privacy.timer"
 ln -sf /etc/systemd/system/veloguard-privacy.timer \
   "$PROFILE/airootfs/etc/systemd/system/timers.target.wants/veloguard-privacy.timer"
-# Hardware/driver setup (Omarchy-derived) — runs ONCE on first boot to install
-# the drivers this machine actually needs (GPU/Wi-Fi/touchpad/…).
+# Live-boot hardware probe → hw.js for the installer's Desktop page (detected
+# hardware, Clean Config pre-selected on laptops). Also on PATH for humans.
+install -Dm644 "$REPO/veloguard/provision/veloguard-hwprobe.service" \
+  "$PROFILE/airootfs/etc/systemd/system/veloguard-hwprobe.service"
+ln -sf /etc/systemd/system/veloguard-hwprobe.service \
+  "$PROFILE/airootfs/etc/systemd/system/multi-user.target.wants/veloguard-hwprobe.service"
+ln -sf /opt/veloguard/provision/veloguard-hwprobe "$PROFILE/airootfs/usr/local/bin/veloguard-hwprobe"
+# Headless SSH link (enabled by the installer only for Headless + "Link this
+# machine to a computer over SSH"; inert without /etc/veloguard/ssh-link.conf).
+for u in veloguard-ssh-link.service veloguard-ssh-link-issue.path veloguard-ssh-link-issue.service; do
+  install -Dm644 "$REPO/veloguard/provision/$u" "$PROFILE/airootfs/etc/systemd/system/$u"
+done
+ln -sf /opt/veloguard/provision/veloguard-ssh-link "$PROFILE/airootfs/usr/local/bin/veloguard-ssh-link"
+# Hardware/driver setup (Omarchy-derived) — the installer runs it into the
+# target; this unit is the first-boot retry when the install was offline.
 install -Dm644 "$REPO/veloguard/provision/veloguard-hardware.service" \
   "$PROFILE/airootfs/etc/systemd/system/veloguard-hardware.service"
 ln -sf /etc/systemd/system/veloguard-hardware.service \
@@ -216,7 +263,10 @@ ConditionPathExists=!/home/veloguard
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/bash -c 'useradd -m -G wheel -s /usr/bin/bash veloguard && passwd -d veloguard'
+# No idle lock / screen-off for the live account: it has no password to type,
+# and an install (Clean Config builds for ~15 min) runs unattended — a lock
+# then just hides the installer. Installed systems keep the normal hypridle.
+ExecStart=/usr/bin/bash -c 'useradd -m -G wheel -s /usr/bin/bash veloguard && passwd -d veloguard && printf "general {\\n    after_sleep_cmd = veloguard-hypr dpms on\\n}\\n" > /home/veloguard/.config/hypr/hypridle.conf && chown veloguard:veloguard /home/veloguard/.config/hypr/hypridle.conf'
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -250,10 +300,15 @@ install -d "$PROFILE/airootfs/usr/share/pixmaps"
 # GDM login-screen / About logo.
 "$IM" "$WALLSRC" -resize 480x \
   "$PROFILE/airootfs/usr/share/pixmaps/veloguardos.png" || echo "  (logo gen skipped)"
-# Calamares installer branding logo.
+# Calamares installer branding: the wide artwork for the welcome page, and a
+# SQUARE crop of the shield for the sidebar logo / window icon (Calamares
+# draws those square — the wide picture came out squashed). `-extent` keeps
+# it square even if the wallpaper's shape ever changes.
 install -d "$PROFILE/airootfs/etc/calamares/branding/veloguardos"
-"$IM" "$WALLSRC" -resize 320x \
+"$IM" "$WALLSRC" -resize 640x \
   "$PROFILE/airootfs/etc/calamares/branding/veloguardos/veloguard-logo.png" || true
+"$IM" "$WALLSRC" -gravity north -crop 38%x68%+0+2% +repage -resize 256x256^ -gravity center -extent 256x256 \
+  "$PROFILE/airootfs/etc/calamares/branding/veloguardos/veloguard-icon.png" || true
 
 # wifi-on-any-hardware: enable the boot-time autodetect service, and stock the
 # offline driver depot (broadcom-wl can't be preinstalled — its blacklists

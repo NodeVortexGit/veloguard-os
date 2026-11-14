@@ -1,0 +1,108 @@
+# Maintainer: NodeVortex <https://github.com/NodeVortexGit>
+#
+# hyprland-multicursor — NodeVortex's Hyprland fork (Hyprland 0.57.0 + one
+# on-screen cursor per pointer device), packaged as a drop-in replacement for
+# Arch's `hyprland`: it PROVIDES and CONFLICTS with it, so everything that
+# depends on hyprland (the portal, the session files, VeloGuard's desktop) is
+# satisfied, and `pacman -Syu` never swaps it for the stock compositor.
+# With cursor.multi_cursor off (the default) it behaves like upstream 0.57.0.
+#
+# Built once (Arch container) and pinned in ../../pkgs — the ISO build and the
+# installer take it from that local [veloguard] repo, like Calamares:
+#   cd iso/pkgs-src/hyprland-multicursor && makepkg -s
+#   cp hyprland-multicursor-*.pkg.tar.zst ../../pkgs/ && (cd ../../pkgs && \
+#     repo-add veloguard.db.tar.gz hyprland-multicursor-*.pkg.tar.zst)
+#
+# REBUILD whenever Arch bumps a library it links (aquamarine, hyprutils,
+# hyprlang, hyprcursor, hyprgraphics, re2, …): unlike Arch's own package,
+# nobody rebuilds this one for a soname change, and a stale binary would not
+# start. The depends below pin the sonames it was built against, so pacman
+# refuses such an upgrade instead of breaking the session.
+pkgname=hyprland-multicursor
+pkgver=0.57.0
+pkgrel=1
+_commit=bb91f23bf3cdb32b9164fde9eaed8afa460aa714   # branch ccr-abe01888-c6hvwc
+pkgdesc="Hyprland 0.57 with a cursor per pointer device (NodeVortex's fork) — drop-in for hyprland"
+arch=(x86_64)
+url="https://github.com/NodeVortexGit/Multy-cursor-Hyprland-"
+license=(BSD-3-Clause)
+depends=(
+  aquamarine libaquamarine.so
+  cairo
+  glib2
+  glibc
+  glslang
+  hyprcursor libhyprcursor.so
+  hyprgraphics libhyprgraphics.so
+  hyprland-guiutils
+  hyprlang libhyprlang.so
+  hyprutils libhyprutils.so
+  hyprwire
+  lcms2
+  libcanberra
+  libdrm
+  libei
+  libgcc
+  libglvnd
+  libinput
+  libstdc++
+  libx11
+  libxcb
+  libxcomposite
+  libxcursor
+  libxfixes
+  libxkbcommon
+  libxrender
+  lua
+  mesa
+  muparser
+  opengl-driver
+  pango
+  pixman
+  re2
+  sdbus-cpp
+  tomlplusplus
+  util-linux-libs
+  wayland
+  wayland-protocols
+  xcb-proto
+  xcb-util
+  xcb-util-errors
+  xcb-util-image
+  xcb-util-keysyms
+  xcb-util-renderutil
+  xcb-util-wm
+  xorg-xwayland
+)
+makedepends=(cmake git glaze hyprland-protocols hyprwayland-scanner ninja xorgproto)
+optdepends=('uwsm: session management')
+provides=("hyprland=$pkgver" wayland-compositor)
+conflicts=(hyprland)
+source=("$pkgname::git+$url.git#commit=$_commit"
+        "udis86::git+https://github.com/canihavesomecoffee/udis86.git")
+sha256sums=(SKIP SKIP)
+
+prepare() {
+  cd "$pkgname"
+  git submodule init subprojects/udis86
+  git config submodule.subprojects/udis86.url "$srcdir/udis86"
+  git -c protocol.file.allow=always submodule update subprojects/udis86
+}
+
+build() {
+  cmake -S "$pkgname" -B build -G Ninja -W no-dev \
+    -D CMAKE_BUILD_TYPE=Release \
+    -D CMAKE_INSTALL_PREFIX=/usr \
+    -D CMAKE_SKIP_RPATH=ON \
+    -D BUILD_TESTING=OFF
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  # Upstream's three default wallpapers are 48 MB of the 54 MB package.
+  # VeloGuard and Clean Config set their own; without the files Hyprland just
+  # draws no default background (IHyprRenderer::requestBackgroundResource).
+  rm -f "$pkgdir"/usr/share/hypr/wall[0-9].png
+  install -Dm644 "$pkgname/LICENSE.hyprland" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

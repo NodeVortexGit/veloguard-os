@@ -7,7 +7,7 @@
   "position": "top",
   "spacing": 0,
   "height": 26,
-  "modules-left": ["custom/veloguard", "hyprland/workspaces"],
+  "modules-left": ["custom/veloguard", "hyprland/workspaces", "niri/workspaces"],
   "modules-center": ["clock"],
   "modules-right": [
     "custom/guard",
@@ -27,6 +27,15 @@
     },
     "persistent-workspaces": {
       "1": [], "2": [], "3": [], "4": [], "5": []
+    }
+  },
+  // The same dots on niri (the installer's niri choice runs this bar too).
+  // Each workspaces module disables itself under the other compositor.
+  "niri/workspaces": {
+    "format": "{icon}",
+    "format-icons": {
+      "default": "",
+      "active": "󱓻"
     }
   },
   "custom/veloguard": {

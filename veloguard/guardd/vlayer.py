@@ -59,7 +59,9 @@ def build_argv(cmd: list[str], tier: str, allow_net: bool = False,
         # be the guest. Shown for transparency; executor dry-runs it.
         return ["firecracker", "--no-api",
                 "--config-file", "/etc/veloguard/microvm.json", "--", *cmd]
-    return cmd  # "none" — no isolation available (shouldn't happen if bwrap present)
+    # "none": never hand back the bare command — a caller that ran it would be
+    # executing "sandboxed" code with the guard's own privileges.
+    raise ValueError(f"no isolation tier available (got {tier!r})")
 
 
 def _bwrap(cmd: list[str], allow_net: bool, persist: str | None) -> list[str]:

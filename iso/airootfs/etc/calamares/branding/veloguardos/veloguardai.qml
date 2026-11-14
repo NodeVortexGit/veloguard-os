@@ -3,18 +3,36 @@
  * or "Local host" → choose an Ollama model to install. Choices are written to
  * Calamares global storage and applied by the veloguardaijob module.
  *
- * NOTE: first cut — the Calamares QML/global-storage API is version-specific
- * (3.3 / Qt6). This needs a boot test of the live ISO to validate + tune.
+ * Loaded by notesqml@veloguardai from the branding directory (Calamares 3.3+
+ * has no "qmlmodule" interface — the old module.desc made Calamares refuse to
+ * start once the page was enabled). Global Storage is `Global` from
+ * io.calamares.core: insert()/value() — there is no setValue(), so every
+ * choice used to vanish into the try/catch.
  */
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import io.calamares.core 1.0
+import "theme.js" as Theme
 
-Item {
+Pane {
     id: page
     width: 800; height: 480
+    padding: 0
+    background: Rectangle { color: Theme.bg }
+    palette.window: Theme.bg
+    palette.windowText: Theme.fg
+    palette.text: Theme.fg
+    palette.base: Theme.deep
+    palette.button: Theme.deep
+    palette.buttonText: Theme.fg
+    palette.highlight: Theme.accent
+    palette.highlightedText: Theme.deep
+    palette.mid: Theme.line
+    palette.dark: Theme.line
+    palette.placeholderText: Theme.muted
 
-    function gset(k, v) { try { Global.setValue(k, v) } catch (e) {} }
+    function gset(k, v) { Global.insert(k, v) }
 
     StackLayout {
         id: stack
@@ -25,7 +43,7 @@ Item {
         // ---- View 0: cloud AI (API) -------------------------------------
         ColumnLayout {
             spacing: 14
-            Label { text: "AI setup"; font.pixelSize: 22; font.bold: true; color: "#13203a" }
+            Label { text: "AI setup"; font.pixelSize: 22; font.bold: true; color: Theme.fg }
             Label {
                 text: "VeloGuardOS is AI-first. Pick a cloud provider and key, or host it locally."
                 wrapMode: Text.WordWrap; Layout.fillWidth: true; opacity: 0.8
@@ -57,7 +75,7 @@ Item {
             TextField {
                 id: model
                 Layout.fillWidth: true
-                placeholderText: provider.currentIndex === 1 ? "claude-haiku-4-5" : "gpt-4o-mini"
+                placeholderText: provider.currentIndex === 1 ? "claude-sonnet-5 (the guard's default)" : "gpt-4o-mini"
                 onTextChanged: gset("veloguard_ai_model", text)
             }
 
@@ -76,7 +94,7 @@ Item {
         // ---- View 1: local (Ollama) model picker ------------------------
         ColumnLayout {
             spacing: 14
-            Label { text: "Local AI (Ollama)"; font.pixelSize: 22; font.bold: true; color: "#13203a" }
+            Label { text: "Local AI (Ollama)"; font.pixelSize: 22; font.bold: true; color: Theme.fg }
             Label {
                 text: "Choose a model to install locally — private, free, runs on this machine."
                 wrapMode: Text.WordWrap; Layout.fillWidth: true; opacity: 0.8

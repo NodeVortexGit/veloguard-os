@@ -47,7 +47,7 @@ post_common() {
   # Flathub — the de-facto Flatpak app store.
   if command -v flatpak >/dev/null; then
     flatpak remote-add --if-not-exists flathub \
-      https://flathub.org/repo/flathub.flatpakref || warn "could not add Flathub"
+      https://dl.flathub.org/repo/flathub.flatpakrepo || warn "could not add Flathub"
     say "Flatpak + Flathub ready."
   fi
   # snapd socket + the /snap symlink classic snaps expect.

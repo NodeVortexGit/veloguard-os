@@ -19,12 +19,14 @@ log() { printf '%s %s\n' "$(date -Is)" "$*" >> "$LOG"; }
 # Not configured yet → nothing to do (keeps the timer quiet by default).
 [ -f "$ID_FILE" ] && [ -f "$BROKERS" ] || { log "not configured; skipping"; exit 0; }
 
-# Refuse to read identity unless it is 0600 (don't leak via loose perms).
-perm="$(stat -c '%a' "$ID_FILE" 2>/dev/null || echo 000)"
-[ "$perm" = "600" ] || { log "REFUSED: $ID_FILE is $perm, must be 600"; exit 1; }
+# Refuse to read identity unless it is root-owned 0600 (don't leak via loose
+# perms, and don't trust a file another account can rewrite).
+perm="$(stat -c '%a %u' "$ID_FILE" 2>/dev/null || echo '000 -1')"
+[ "$perm" = "600 0" ] || { log "REFUSED: $ID_FILE must be mode 600 owned by root (is: $perm)"; exit 1; }
 
-# shellcheck disable=SC1090
-EMAIL=""; . "$ID_FILE"
+# PARSE, never `source`: this runs as root on a timer, and sourcing the file
+# executed whatever shell it contained.
+EMAIL="$(sed -n 's/^[[:space:]]*EMAIL=["'\'']\{0,1\}\([^"'\''[:space:]]*\)["'\'']\{0,1\}[[:space:]]*$/\1/p' "$ID_FILE" | head -n1)"
 [ -n "$EMAIL" ] || { log "no EMAIL in identity; skipping"; exit 0; }
 
 # Offline? Fail gracefully (don't error the timer).
@@ -37,6 +39,8 @@ ok=0; fail=0
 while IFS=$'\t' read -r name url; do
   [ -z "${name:-}" ] && continue
   case "$name" in \#*) continue;; esac
+  # The request carries the user's email — never over cleartext HTTP.
+  case "$url" in https://*) ;; *) log "SKIP $name (not https)"; fail=$((fail+1)); continue;; esac
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
           -X POST --data-urlencode "email=${EMAIL}" \
           --data-urlencode "request=opt-out-and-delete" "$url" 2>/dev/null)"

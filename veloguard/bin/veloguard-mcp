@@ -10,7 +10,9 @@
 # Autonomy: VELOGUARD_AGENT_AUTONOMY = read | guarded | full   (default guarded)
 # Enforce : VELOGUARD_APPLY=1 to touch the kernel for real     (default dry-run)
 #
-HOME_DIR="${VELOGUARD_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
+# Resolve symlinks: /usr/local/bin/<this> -> /opt/veloguard/bin/<this>. With a
+# bare dirname "$0" HOME_DIR became /usr/local and `-m guardd` didn't exist.
+HOME_DIR="${VELOGUARD_HOME:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
 VENV="${VELOGUARD_VENV:-$HOME_DIR/.venv}"
 PY="python3"; [ -x "$VENV/bin/python" ] && PY="$VENV/bin/python"
 cd "$HOME_DIR"
