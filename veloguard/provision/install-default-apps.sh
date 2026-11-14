@@ -62,13 +62,23 @@ FLATPAKS=(
 PENDING=/var/lib/veloguard/flatpak-pending
 install_flatpaks() {
   say "installing Flatpak apps (Brave, Discord, Dolphin, Viber, ZapZap, LibreOffice, Transmission)…"
+  # Queue everything first and strike apps off as they land: if the installer
+  # stops this step at its time limit (slow link), whatever is left is still
+  # picked up on first boot.
+  queue_pending "${FLATPAKS[@]}"
   local app failed=()
   for app in "${FLATPAKS[@]}"; do
-    flatpak install -y --noninteractive --system flathub "$app" || failed+=("$app")
+    if flatpak install -y --noninteractive --system flathub "$app"; then
+      sed -i "/^${app//./\\.}\$/d" "$PENDING"
+    else
+      failed+=("$app")
+    fi
   done
-  [ "${#failed[@]}" -eq 0 ] && { rm -f "$PENDING"; return 0; }
+  if [ "${#failed[@]}" -eq 0 ]; then
+    rm -f "$PENDING" /etc/systemd/system/multi-user.target.wants/veloguard-flatpak-pending.service
+    return 0
+  fi
   warn "not installed yet: ${failed[*]} — will be installed on the first online boot"
-  queue_pending "${failed[@]}"
 }
 
 queue_pending() {
