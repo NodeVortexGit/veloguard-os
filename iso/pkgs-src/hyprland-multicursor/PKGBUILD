@@ -100,5 +100,9 @@ build() {
 
 package() {
   DESTDIR="$pkgdir" cmake --install build
+  # Upstream's three default wallpapers are 48 MB of the 54 MB package.
+  # VeloGuard and Clean Config set their own; without the files Hyprland just
+  # draws no default background (IHyprRenderer::requestBackgroundResource).
+  rm -f "$pkgdir"/usr/share/hypr/wall[0-9].png
   install -Dm644 "$pkgname/LICENSE.hyprland" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
