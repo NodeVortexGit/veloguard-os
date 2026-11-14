@@ -17,6 +17,14 @@ hl.config({
   },
 })
 
+-- Multi-cursor (VeloGuardOS's compositor is NodeVortex's Hyprland fork): every
+-- physical mouse / touchpad / trackball gets its own on-screen cursor. Off by
+-- default — then it behaves exactly like upstream Hyprland. Uncomment to use:
+-- hl.config({ cursor = { multi_cursor = true, multi_cursor_seats = true } })
+-- Put several devices on one cursor, e.g. a laptop's touchpad and trackpoint:
+-- hl.device({ name = "some-touchpad",   cursor_id = 1 })
+-- hl.device({ name = "some-trackpoint", cursor_id = 1 })
+
 -- Scroll nicely in the terminal
 hl.window_rule({
   name = "terminal-touchpad-scroll",
