@@ -16,6 +16,22 @@ QWidget {
     selection-color: #0d1729;
 }
 QLabel, QCheckBox, QRadioButton, QGroupBox { background: transparent; }
+/* Tick boxes and radio dots: the blanket QWidget background above paints the
+   style's own indicators navy-on-navy, so "Encrypt system" and "Restart now"
+   showed no box at all. Draw them explicitly. */
+QCheckBox::indicator, QRadioButton::indicator {
+    width: 14px; height: 14px;
+    background-color: #0d1729;
+    border: 1px solid #8b98ad;
+}
+QCheckBox::indicator { border-radius: 3px; }
+QRadioButton::indicator { border-radius: 8px; }
+QCheckBox::indicator:hover, QRadioButton::indicator:hover { border-color: #33ccff; }
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+    background-color: #33ccff;
+    border: 1px solid #e6edf7;
+}
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled { border-color: #2b3b5c; }
 QGroupBox { border: 1px solid #2b3b5c; border-radius: 6px; margin-top: 1.2em; padding-top: 6px; }
 QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #33ccff; }
 QToolTip { background-color: #0d1729; color: #e6edf7; border: 1px solid #33ccff; padding: 4px; }

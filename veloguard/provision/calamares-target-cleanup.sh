@@ -45,7 +45,7 @@ rm -f /etc/sudoers.d/10-wheel-nopasswd
 rm -f /usr/share/applications/install-to-disk.desktop \
       /usr/share/applications/install-to-disk-advanced.desktop \
       /etc/polkit-1/rules.d/49-veloguard-live-calamares.rules
-for p in calamares ckbcomp archinstall; do
+for p in calamares ckbcomp archinstall mkinitcpio-archiso; do
   pacman -Q "$p" >/dev/null 2>&1 && pacman -Rns --noconfirm "$p" >/dev/null 2>&1
 done
 rm -rf /etc/calamares /usr/lib/calamares /usr/share/calamares
