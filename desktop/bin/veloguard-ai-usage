@@ -12,9 +12,20 @@ Read from each agent's own local session logs (nothing leaves the machine):
   Cursor agent, Copilot CLI, Factory Droid, Crush… — read generically from
   their session files ("≈": token fields found in the logs)
 
+Plan usage — each subscription's own limits, the bars on hover:
+  Claude Code  session (5 h) + week   from VeloGuard's Claude Code plugin, which
+                                      saves what Claude Code reports (no token read)
+  Codex        5 h + week             what Codex reports with every turn (its logs)
+  Kimi Code    month + session        ~/.cache/veloguard/usage/kimi.json, when its
+                                      fetcher is enabled (needs Kimi's server token)
+
   veloguard-ai-usage              # a table
   veloguard-ai-usage --details    # the same, per agent with sessions
-  veloguard-ai-usage --waybar     # the bar module (JSON)
+  veloguard-ai-usage --waybar     # the bar module (JSON): the logo (CSS, by
+                                  # class) of the subscription in use now — the
+                                  # last one used; OpenClaw on Kimi counts as
+                                  # Kimi — and its session %
+  veloguard-ai-usage --plans      # plan usage as JSON (the quick panel)
   veloguard-ai-usage --json
 """
 from __future__ import annotations
@@ -170,6 +181,7 @@ def codex() -> dict:
             if p.get("rate_limits") and t >= latest_limits[0]:
                 latest_limits = (t, p["rate_limits"])
     r["limits"] = latest_limits[1]
+    r["limits_ts"] = latest_limits[0]
     return r
 
 
@@ -224,6 +236,204 @@ def collect() -> list[dict]:
     return [r for r in rows if r["total"] or r["name"] in ("claude-code", "codex")]
 
 
+# --- plan usage: each subscription's own windows ------------------------------
+CACHE = HOME / ".cache" / "veloguard" / "usage"
+
+
+def _iso(ts: str | None) -> float | None:
+    if not ts:
+        return None
+    try:
+        return dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _window(name: str, pct, resets: float | None, kind: str = "long") -> dict:
+    now = time.time()
+    if resets and resets < now:          # the window reset since the reading
+        pct, resets = 0.0, None
+    return {"name": name, "kind": kind, "percent": None if pct is None else round(float(pct), 1),
+            "resets": resets, "resets_text": when(resets)}
+
+
+# Each subscription as its own usage page shows it: its colour, its favicon,
+# its windows' names (Claude: "Current session" + "Weekly"; Codex: "5h limit"
+# + "Weekly limit"; Kimi Code: "Session" + "Monthly").
+ICON_DIR = "/usr/share/veloguard/agents/icons"
+BRAND = {"claude-code": "#d97757", "codex": "#e8e8ec", "kimi": "#1783ff"}
+
+
+def _plan(agent: str, label: str) -> dict:
+    return {"agent": agent, "label": label, "windows": [], "note": "",
+            "color": BRAND[agent], "icon": f"{ICON_DIR}/{agent}.png"}
+
+
+def plan_claude() -> dict:
+    out = _plan("claude-code", "Claude Code")
+    try:
+        d = json.loads((CACHE / "claude-code.json").read_text())
+        w = d.get("windows", {})
+        for key, name, kind in (("five_hour", "Current session", "session"), ("seven_day", "Weekly", "long")):
+            if key in w:
+                out["windows"].append(_window(name, w[key].get("percentUsed"), _iso(w[key].get("resetsAt")), kind))
+        out["updated"] = _iso(d.get("updated"))
+    except (OSError, ValueError, AttributeError):
+        pass
+    if not out["windows"]:
+        out["note"] = "no reading yet — use Claude Code once (its plugin saves the numbers)"
+    return out
+
+
+def plan_codex(cx: dict) -> dict:
+    out = _plan("codex", "Codex")
+    lim, ts = cx.get("limits"), cx.get("limits_ts") or 0
+    if isinstance(lim, dict):
+        for key in ("primary", "secondary"):
+            v = lim.get(key)
+            if not isinstance(v, dict) or v.get("used_percent") is None:
+                continue
+            wm = v.get("window_minutes") or 0
+            short = bool(wm) and wm <= 600
+            name = "5h limit" if short else ("Weekly limit" if wm >= 10000 else f"{wm // 60}h limit")
+            resets = v.get("resets_at")
+            if not isinstance(resets, (int, float)) and isinstance(v.get("resets_in_seconds"), (int, float)):
+                resets = ts + v["resets_in_seconds"]
+            out["windows"].append(_window(name, v["used_percent"], resets, "session" if short else "long"))
+        out["updated"] = ts
+    if not out["windows"]:
+        out["note"] = "no reading yet — Codex reports its limits after your first turn"
+    return out
+
+
+def plan_kimi() -> dict:
+    out = _plan("kimi", "Kimi Code")
+    try:
+        d = json.loads((CACHE / "kimi.json").read_text())
+        u = {k: v for k, v in d.get("usages", {}).items() if isinstance(v, dict) and v.get("usedRatio") is not None}
+        # two bars, like Kimi Code's console: the session (5 h) and the month
+        # (the week when there's no monthly figure)
+        long_key = next((k for k in ("monthTotal", "monthCode", "limit7d") if k in u), None)
+        for key, name, kind in (("limit5h", "Session", "session"),
+                                (long_key, "Weekly" if long_key == "limit7d" else "Monthly", "long")):
+            if key in u:
+                out["windows"].append(_window(name, 100 * float(u[key]["usedRatio"]), _iso(u[key].get("resetAt")), kind))
+        out["updated"] = _iso(d.get("updated"))
+    except (OSError, ValueError, AttributeError):
+        pass
+    if not out["windows"]:
+        out["note"] = "not enabled yet — reading Kimi's quota needs its local server token"
+    return out
+
+
+def plans(rows: list[dict]) -> list[dict]:
+    cx = next((r for r in rows if r["name"] == "codex"), {})
+    ps = [plan_claude(), plan_codex(cx), plan_kimi()]
+    cur = current(rows, ps)
+    for p in ps:
+        p["current"] = p["agent"] == cur
+    return ps
+
+
+# --- which subscription is in use right now: the bar's icon -------------------
+PROCS = {"claude-code": ("claude",), "codex": ("codex",), "kimi": ("kimi", "kimi-code")}
+RECENT = 30 * 60
+
+
+def openclaw_plan() -> str | None:
+    """OpenClaw spends whichever subscription its default model is on — Kimi's
+    when that model is a Kimi / Moonshot one."""
+    try:
+        raw = (HOME / ".openclaw" / "openclaw.json").read_text().lower()
+    except OSError:
+        return None
+    return "kimi" if ("kimi" in raw or "moonshot" in raw) else None
+
+
+def running() -> set[str]:
+    names = set()
+    for d in glob.glob("/proc/[0-9]*/comm"):
+        try:
+            names.add(open(d).read().strip())
+        except OSError:
+            continue
+    return {a for a, ps in PROCS.items() if names & set(ps)} | (
+        {"kimi"} if "openclaw" in names and openclaw_plan() == "kimi" else set())
+
+
+def current(rows: list[dict], ps: list[dict]) -> str | None:
+    """The plan whose agent did something last (within half an hour); else the
+    one whose agent is open; else the one closest to its limit."""
+    last = {}
+    for r in rows:
+        a = r["name"] if r["name"] in BRAND else ("kimi" if r["name"] == "openclaw" and openclaw_plan() == "kimi" else None)
+        if a:
+            last[a] = max(last.get(a, 0.0), r.get("last") or 0.0)
+    for p in ps:
+        if p.get("updated"):
+            last[p["agent"]] = max(last.get(p["agent"], 0.0), float(p["updated"]))
+    now = time.time()
+    fresh = {a: t for a, t in last.items() if now - t < RECENT}
+    if fresh:
+        return max(fresh, key=fresh.get)
+    on = running()
+    if on:
+        return max(on, key=lambda a: last.get(a, 0.0))
+    best = [(w["percent"], p["agent"]) for p in ps for w in p["windows"] if w["percent"] is not None]
+    return max(best)[1] if best else None
+
+
+def session_pct(p: dict) -> float | None:
+    """The short window (Claude/Kimi "session", Codex "5 h"); else the first."""
+    ws = [w for w in p["windows"] if w["percent"] is not None]
+    short = [w for w in ws if w["kind"] == "session"]
+    return (short or ws or [{"percent": None}])[0]["percent"]
+
+
+BAR = 30
+
+
+def bar(pct: float | None, color: str = "#6b9bff", width: int = BAR) -> str:
+    if pct is None:
+        return "<span color='#3a4058'>" + "━" * width + "</span>"
+    filled = max(0, min(width, round(width * pct / 100)))
+    if pct >= 90:
+        color = "#f26d7d"                 # nearly out — red, whatever the brand
+    return f"<span color='{color}'>{'━' * filled}</span><span color='#3a4058'>{'━' * (width - filled)}</span>"
+
+
+def when(ts: float | None) -> str:
+    """ "Resets in 2 hr 14 min" within a day, else "Resets Fri 10:00". """
+    if not ts:
+        return ""
+    left = ts - time.time()
+    if left <= 0:
+        return "Resets now"
+    if left < 86400:
+        h, m = int(left // 3600), int(left % 3600 // 60)
+        return "Resets in " + (f"{h} hr {m} min" if h else f"{max(m, 1)} min")
+    return "Resets " + dt.datetime.fromtimestamp(ts).strftime("%a %H:%M")
+
+
+GLYPH = {"claude-code": "\u273b", "codex": "\U000f02d9", "kimi": "\U000f0594"}
+
+
+def plans_tooltip(ps: list[dict]) -> list[str]:
+    out = []
+    for p in ps:
+        now = "  <span color='#6a7290'>· now</span>" if p.get("current") else ""
+        out.append(f"<span size='large'><span color='{p['color']}'>{GLYPH[p['agent']]}</span> <b>{p['label']}</b></span>{now}")
+        if not p["windows"]:
+            out.append(f"<span color='#6a7290'>{p['note']}</span>")
+        for w in p["windows"]:
+            pct = "?" if w["percent"] is None else f"{w['percent']:.0f}% used"
+            out.append(f"{w['name']:<{BAR - len(pct)}}{pct}")
+            out.append(f"<span size='large'>{bar(w['percent'], p['color'])}</span>")
+            out.append(f"<span color='#8a93b0'>{w['resets_text']}</span>")
+        out.append("")
+    return out[:-1]
+
+
 def human(n: int) -> str:
     for unit, div in (("B", 1e9), ("M", 1e6), ("k", 1e3)):
         if n >= div:
@@ -247,6 +457,10 @@ def limits_text(lim) -> str:
 def main() -> int:
     rows = collect()
     total = sum(r["total"] for r in rows)
+    ps = plans(rows)
+    if "--plans" in sys.argv:
+        print(json.dumps(ps))
+        return 0
     if "--json" in sys.argv:
         print(json.dumps(rows, default=str))
         return 0
@@ -264,13 +478,23 @@ def main() -> int:
             if extra:
                 line += "\n              " + " · ".join(extra)
             lines_.append(line)
-        idle = total == 0
-        hot = any((isinstance(r["limits"], dict) and any(
-            isinstance(v, dict) and (v.get("used_percent") or 0) >= 80 for v in r["limits"].values())) for r in rows)
-        tip = ("<b>AI usage today</b> (tokens, from each agent's own logs)\n\n<tt>"
-               + ("\n".join(lines_) if lines_ else "nothing yet") + "</tt>\n\nClick: details · right-click: open your agent")
-        print(json.dumps({"text": f"󰚩 {human(total)}" if total else "󰚩",
-                          "tooltip": tip, "class": "high" if hot else ("idle" if idle else "active")}))
+        pcts = [w["percent"] for p in ps for w in p["windows"] if w["percent"] is not None]
+        session = [w["percent"] for p in ps for w in p["windows"]
+                   if w["percent"] is not None and w["kind"] == "session"]
+        hot = any(x >= 85 for x in pcts)
+        tip = ("<tt>" + "\n".join(plans_tooltip(ps))
+               + "</tt>\n\n<b>Tokens today</b> (from each agent's logs)\n<tt>"
+               + ("\n".join(lines_) if lines_ else "nothing yet")
+               + "</tt>\n\nClick: the quick panel's usage view · right-click: open your agent")
+        cur = next((p for p in ps if p.get("current")), None)
+        if cur:
+            pct = session_pct(cur)
+            text = f"{pct:.0f}%" if pct is not None else "–"     # the logo is the module's CSS
+        else:
+            text = f"󰚩 {max(session):.0f}%" if session else (f"󰚩 {human(total)}" if total else "󰚩")
+        state = "high" if hot else ("active" if (pcts or total) else "idle")
+        print(json.dumps({"text": text, "tooltip": tip,
+                          "class": [state] + ([cur["agent"]] if cur else [])}))
         return 0
     print(f"AI usage today — {human(total)} tokens across {sum(1 for r in rows if r['total'])} agent(s)\n")
     print(f"  {'agent':<14}{'total':>9}{'input':>9}{'output':>9}{'cache':>9}  sessions")

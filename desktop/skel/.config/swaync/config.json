@@ -29,85 +29,17 @@
   "script-fail-notify": true,
   "widgets": [
     "title",
-    "buttons-grid",
-    "volume",
-    "backlight",
-    "mpris",
     "dnd",
     "notifications"
   ],
   "widget-config": {
     "title": {
-      "text": "VeloGuard",
+      "text": "Notifications",
       "clear-all-button": true,
       "button-text": "Clear"
     },
     "dnd": {
       "text": "Do not disturb"
-    },
-    "mpris": {
-      "image-size": 72,
-      "blur": true
-    },
-    "volume": {
-      "label": "󰕾",
-      "show-per-app": false
-    },
-    "backlight": {
-      "label": "󰃠",
-      "device": ""
-    },
-    "buttons-grid": {
-      "buttons-per-row": 4,
-      "actions": [
-        {
-          "label": "󰤨  Wi-Fi",
-          "type": "toggle",
-          "active": true,
-          "command": "sh -c '[ \"$SWAYNC_TOGGLE_STATE\" = true ] && nmcli radio wifi on || nmcli radio wifi off'",
-          "update-command": "sh -c '[ \"$(nmcli radio wifi)\" = enabled ] && echo true || echo false'"
-        },
-        {
-          "label": "󰂯  Bluetooth",
-          "type": "toggle",
-          "active": true,
-          "command": "sh -c '[ \"$SWAYNC_TOGGLE_STATE\" = true ] && { rfkill unblock bluetooth; bluetoothctl power on; } || bluetoothctl power off'",
-          "update-command": "sh -c 'bluetoothctl show 2>/dev/null | grep -q \"Powered: yes\" && echo true || echo false'"
-        },
-        {
-          "label": "󰒃  VPN",
-          "type": "toggle",
-          "active": false,
-          "command": "sh -c '[ \"$SWAYNC_TOGGLE_STATE\" = true ] && pkexec veloguard-vpn connect || pkexec veloguard-vpn disconnect; pkill -RTMIN+7 waybar'",
-          "update-command": "sh -c 'veloguard-vpn active >/dev/null 2>&1 && echo true || echo false'"
-        },
-        {
-          "label": "󰀝  Airplane",
-          "type": "toggle",
-          "active": false,
-          "command": "sh -c '[ \"$SWAYNC_TOGGLE_STATE\" = true ] && rfkill block all || rfkill unblock all'",
-          "update-command": "sh -c 'rfkill list | grep -q \"Soft blocked: no\" && echo false || echo true'"
-        },
-        {
-          "label": "󰖔  Night",
-          "type": "toggle",
-          "active": false,
-          "command": "sh -c '[ \"$SWAYNC_TOGGLE_STATE\" = true ] && { pkill hyprsunset; setsid -f hyprsunset -t 4000 >/dev/null 2>&1; } || pkill hyprsunset'",
-          "update-command": "sh -c 'pgrep -x hyprsunset >/dev/null && echo true || echo false'"
-        },
-        {
-          "label": "󰄀  Shot",
-          "command": "sh -c 'swaync-client -cp; sleep 0.4; grim -g \"$(slurp)\" - | wl-copy && notify-send -u low \"Screenshot copied\"'"
-        },
-        {
-          "label": "󰚩  Agent",
-          "command": "sh -c 'swaync-client -cp; veloguard-agent'"
-        },
-        {
-          "label": "󰐥  Power",
-          "command": "sh -c 'swaync-client -cp; veloguard-powermenu'"
-        }
-      ]
     }
   }
 }

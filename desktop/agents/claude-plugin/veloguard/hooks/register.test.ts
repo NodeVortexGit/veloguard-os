@@ -74,3 +74,19 @@ test('reading credentials is put to the person', async ($, on) => {
   const code = await $.tool.check({ tool: 'Read', input: { file_path: '/home/u/app/main.py' } })
   expect(code.decision).toBe('allow')
 })
+
+test('plan usage is saved for the bar, without any token', async ($, on) => {
+  const written: Record<string, string> = {}
+  on('env.get', () => ({ value: '/home/u' }))
+  on('fs.write', (_: unknown, e: { path: string; text: string }) => { written[e.path] = e.text; return { value: undefined } })
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  await $.session.measure({
+    startedAt: new Date().toISOString(), context: { window: 200000 } as any, cost: undefined,
+    rateLimits: [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2026-11-15T18:00:00Z' },
+                 { kind: 'seven_day', percentUsed: 12.5, resetsAt: '2026-11-19T09:00:00Z' }],
+    changed: ['rateLimits'],
+  } as any)
+  const saved = JSON.parse(written['/home/u/.cache/veloguard/usage/claude-code.json'] ?? '{}')
+  expect(saved.windows.five_hour.percentUsed).toBe(42)
+  expect(saved.windows.seven_day.percentUsed).toBe(12.5)
+})

@@ -40,13 +40,25 @@ tooltip label { padding: 6px 8px; }
 #custom-veloguard { font-size: 15px; color: @accent2; padding: 0 10px 0 4px; }
 
 #custom-ai-usage, #custom-guard, #language, #network, #bluetooth, #pulseaudio,
-#backlight, #power-profiles-daemon, #battery, #tray, #custom-expand-icon, #custom-quickpanel {
+#backlight, #power-profiles-daemon, #battery, #tray, #custom-expand-icon, #custom-notifications, #custom-quickpanel {
   padding: 0 9px;
 }
 
 #custom-ai-usage { color: @accent2; }
 #custom-ai-usage.high { color: @warn; }
 #custom-ai-usage.idle { color: @muted; }
+/* the subscription in use now, as its own favicon (veloguard-ai-usage sets the class) */
+#custom-ai-usage.claude-code, #custom-ai-usage.codex, #custom-ai-usage.kimi {
+  background-repeat: no-repeat;
+  background-size: 18px 18px;
+  background-position: 9px center;
+  padding-left: 33px;
+  color: @fg;
+}
+#custom-ai-usage.claude-code { background-image: url("/usr/share/veloguard/agents/icons/claude-code.png"); }
+#custom-ai-usage.codex       { background-image: url("/usr/share/veloguard/agents/icons/codex.png"); }
+#custom-ai-usage.kimi        { background-image: url("/usr/share/veloguard/agents/icons/kimi.png"); }
+#custom-ai-usage.high        { color: @warn; }
 
 #custom-quickpanel {
   font-size: 14px;

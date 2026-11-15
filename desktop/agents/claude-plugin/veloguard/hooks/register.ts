@@ -86,6 +86,25 @@ export const register: Register = on => {
     return { sections: [...r.sections, { id: 'veloguard:os', text: RULES, scope: 'session' as const }] }
   })
 
+  // Plan usage for the bar (veloguard-ai-usage): the session (5 h) and weekly
+  // windows as Claude Code itself reports them — no token is read anywhere,
+  // the numbers come with the session's own measurements. Written whenever a
+  // window moves a whole point; the bar shows the latest reading.
+  on('session.measure', async ($, e, next) => {
+    const r = await next(e)
+    try {
+      if (e.changed.includes('rateLimits') && e.rateLimits.length) {
+        const home = await $.env.get('HOME')
+        if (home) {
+          const windows = Object.fromEntries(e.rateLimits.map(w => [w.kind, { percentUsed: w.percentUsed, resetsAt: w.resetsAt ?? null }]))
+          await $.fs.write(`${home}/.cache/veloguard/usage/claude-code.json`,
+                           JSON.stringify({ updated: new Date().toISOString(), windows }) + '\n')
+        }
+      }
+    } catch { /* the bar just shows the previous reading */ }
+    return r
+  })
+
   on('session.start', async ($, e, next) => {
     const r = await next(e)
     try {

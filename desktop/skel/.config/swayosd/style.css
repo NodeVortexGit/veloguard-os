@@ -1,0 +1,14 @@
+/* VeloGuardOS volume / brightness pop-up (swayosd) — Frost: a translucent strip
+   near the bottom of the screen; Hyprland blurs behind it (layer rule "swayosd"). */
+window#osd {
+  background: rgba(10, 10, 18, 0.62);
+  border: 1px solid rgba(59, 91, 217, 0.6);
+  border-radius: 0;
+  padding: 12px 18px;
+}
+#container { margin: 4px; }
+image, label { color: #d8dcea; }
+progressbar { min-height: 6px; border-radius: 0; }
+progressbar trough { background: rgba(255, 255, 255, 0.10); min-height: 6px; border-radius: 0; }
+progressbar progress { background: #3b5bd9; min-height: 6px; border-radius: 0; }
+progressbar:disabled progress { background: #6a7290; }

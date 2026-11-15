@@ -2,7 +2,7 @@
 -- github.com/NodeVortexGit/Clean_Config_Hyperland), on VeloGuardOS. Loaded
 -- after the stock defaults and VeloGuard's additions, so where a key differs
 -- these win. Caelestia-shell bindings map to their VeloGuard equivalents:
--- the island/quick panel → the bar's quick panel (swaync), the launcher →
+-- the island/quick panel → the bar's quick panel (Quickshell), the launcher →
 -- Albert, nexus → the AI agent, session → the power menu.
 local M = "SUPER"
 local function key(k) return M .. " + " .. k end

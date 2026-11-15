@@ -62,7 +62,8 @@ hl.window_rule({
 -- Frosted layers: the bar, the quick panel and notifications (swaync), the
 -- launcher (Albert), wofi menus and the lock screen blur what's behind them.
 for _, ns in ipairs({ "waybar", "swaync-control-center", "swaync-notification-window",
-                      "albert", "wofi", "notifications", "logout_dialog" }) do
+                      "veloguard-quickpanel", "swayosd", "albert", "wofi", "notifications",
+                      "logout_dialog" }) do
   hl.layer_rule({ name = "frost-" .. ns, match = { namespace = ns }, blur = true, ignore_alpha = 0.15 })
 end
 

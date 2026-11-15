@@ -23,6 +23,7 @@
     "power-profiles-daemon",
     "battery",
     "group/tray-expander",
+    "custom/notifications",
     "custom/quickpanel"
   ],
 
@@ -61,9 +62,9 @@
   "custom/ai-usage": {
     "exec": "veloguard-ai-usage --waybar",
     "return-type": "json",
-    "interval": 60,
+    "interval": 30,
     "signal": 8,
-    "on-click": "alacritty --class org.veloguard.usage -e sh -c 'veloguard-ai-usage --details; echo; read -rp \"Enter to close\" _'",
+    "on-click": "veloguard-quickpanel --usage",
     "on-click-right": "veloguard-agent"
   },
   // VPN / Wi-Fi trust / staged update / an active root grant / guard health
@@ -146,7 +147,8 @@
   },
   "custom/expand-icon": { "format": "", "tooltip": false },
   "tray": { "icon-size": 14, "spacing": 12 },
-  "custom/quickpanel": {
+  // Notifications (swaync) — the bell: count / do-not-disturb; click opens them
+  "custom/notifications": {
     "exec": "swaync-client -swb",
     "return-type": "json",
     "exec-if": "which swaync-client",
@@ -157,9 +159,15 @@
       "inhibited-notification": "󰂚", "inhibited-none": "󰂜",
       "dnd-inhibited-notification": "󰂛", "dnd-inhibited-none": "󰪑"
     },
-    "on-click": "veloguard-quickpanel",
+    "on-click": "swaync-client -t -sw",
     "on-click-right": "swaync-client -d -sw",
-    "tooltip-format": "Quick panel (Super) — right-click: do not disturb",
+    "tooltip-format": "Notifications (Super+N) — right-click: do not disturb",
     "escape": true
+  },
+  // The quick panel (Quickshell): toggles, sliders, media, AI plan usage
+  "custom/quickpanel": {
+    "format": "󰒓",
+    "tooltip-format": "Quick panel (Super)",
+    "on-click": "veloguard-quickpanel"
   }
 }

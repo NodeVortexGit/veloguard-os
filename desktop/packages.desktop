@@ -21,11 +21,13 @@ qt5-wayland
 qt6-wayland
 kvantum
 
-# Bar, notifications + the quick panel (swaync), launcher (Albert — from the
-# local [veloguard] repo, iso/pkgs-src/albert; wofi for the bar's menus),
-# wallpaper, OSD. mako stays as the fallback notification daemon.
+# Bar, notifications (swaync), the quick panel (Quickshell: toggles, sliders,
+# media, AI plan usage), launcher (Albert — from the local [veloguard] repo,
+# iso/pkgs-src/albert; wofi for the bar's menus), wallpaper, the volume /
+# brightness pop-up (swayosd). mako stays as the fallback notification daemon.
 waybar
 swaync
+quickshell
 albert
 mako
 wofi
