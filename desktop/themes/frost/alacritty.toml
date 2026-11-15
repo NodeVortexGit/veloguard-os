@@ -1,0 +1,32 @@
+# Frost theme — alacritty colors (no opacity here: Hyprland makes every window translucent)
+[colors.primary]
+background = "#05050a"
+foreground = "#d8dcea"
+
+[colors.cursor]
+text = "#05050a"
+cursor = "#7aa2f7"
+
+[colors.selection]
+background = "#3b5bd9"
+foreground = "#ffffff"
+
+[colors.normal]
+black   = "#0a0a12"
+red     = "#f26d7d"
+green   = "#7ee0a8"
+yellow  = "#f2c66d"
+blue    = "#6b9bff"
+magenta = "#b49cff"
+cyan    = "#7dcfff"
+white   = "#d8dcea"
+
+[colors.bright]
+black   = "#6a7290"
+red     = "#ff8a98"
+green   = "#9ef0c2"
+yellow  = "#ffd98a"
+blue    = "#8ab4ff"
+magenta = "#c9b6ff"
+cyan    = "#a4e3ff"
+white   = "#ffffff"

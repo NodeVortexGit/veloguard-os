@@ -8,8 +8,13 @@ hl.on("hyprland.start", function()
   hl.exec_cmd("hypridle")
   -- The bar and notifications through veloguard-session-start: their output
   -- goes to the journal, and a crash during login is retried.
-  hl.exec_cmd("veloguard-session-start mako")
+  -- Notifications AND the quick panel: swaync (its control centre is the
+  -- bar's quick panel). mako stays installed as a fallback, not started.
+  hl.exec_cmd("veloguard-session-start swaync")
   hl.exec_cmd("veloguard-session-start waybar")
+  -- Albert: the search bar (Super+Alt / Super+R); fcitx5: Japanese input (jp layout)
+  hl.exec_cmd("veloguard-session-start albert")
+  hl.exec_cmd("fcitx5 -d --replace")
   hl.exec_cmd('swaybg -i "$(veloguard-theme background)" -m fill')
   -- Polkit authentication agent (VPN/import/update flows raise polkit prompts)
   hl.exec_cmd("/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1")

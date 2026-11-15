@@ -1,0 +1,56 @@
+{
+  "name": "claude-code",
+  "label": "Claude Code",
+  "vendor": "Anthropic",
+  "bin": "claude",
+  "bin_paths": [
+    "~/.local/bin/claude",
+    "/usr/bin/claude"
+  ],
+  "signin": "claude   (then /login)",
+  "home": {
+    "overlay": [
+      "~/.claude"
+    ],
+    "files": [
+      "~/.claude.json"
+    ],
+    "ro": [
+      "~/.local/share/claude",
+      "~/.local/bin/claude"
+    ]
+  },
+  "env": [
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN"
+  ],
+  "brain": {
+    "_why": "--restricted ignores user/project settings (no hooks); --tools \"\" and --strict-mcp-config leave it no tools at all: a pure reasoning brain.",
+    "argv": [
+      "claude",
+      "-p",
+      "--restricted",
+      "--tools",
+      "",
+      "--strict-mcp-config",
+      "--no-session-persistence",
+      "--output-format",
+      "text"
+    ],
+    "system_flag": "--system-prompt",
+    "model_flag": "--model",
+    "prompt": "stdin"
+  },
+  "launch": {
+    "argv": [
+      "claude"
+    ],
+    "_why": "the VeloGuard plugin (veloguard-agent connect) brings the guard's MCP tools, rules and checks"
+  },
+  "ask": {
+    "argv": [
+      "claude"
+    ],
+    "prompt": "arg"
+  }
+}

@@ -18,6 +18,8 @@ TRUSTED_LIST="${VELOGUARD_TRUSTED_LIST:-/var/lib/veloguard/trusted-ssids}"
 
 menu() { wofi --dmenu --width 380 --height 320 -p "$1"; }
 note() { notify-send "VeloGuard" "$1"; }
+# A failure: the notification offers to hand it to an AI agent.
+note_err() { veloguard-notify --error "VeloGuard" "$1" 2>/dev/null || notify-send "VeloGuard" "$1"; }
 
 # Current SSID, unescaped: `nmcli -t` writes ':' inside an SSID as '\:' and
 # '\' as '\\'. The trusted-ssids list stores the real SSID (veloguard-wifi-trust
@@ -28,24 +30,52 @@ current_ssid() {
     | sed -e 's/\\\(.\)/\1/g'
 }
 
+# Is <provider> carrying the traffic right now? Read as the user, no privilege:
+# Proton and Surfshark tunnels are NetworkManager connections named after the
+# provider; NordVPN keeps its own state. TYPE is asked for first so a Wi-Fi
+# NAMED like a provider never counts.
+provider_up() {
+  local want="$1" line
+  if [ "$want" = nord ]; then
+    command -v nordvpn >/dev/null 2>&1 && nordvpn status 2>/dev/null | grep -q 'Status: Connected'
+    return
+  fi
+  while IFS= read -r line; do
+    case "${line%%:*}" in vpn|wireguard|tun) ;; *) continue ;; esac
+    line="${line#*:}"
+    case "${line,,}" in *"$want"*) return 0 ;; esac
+  done < <(nmcli -t -f TYPE,NAME connection show --active 2>/dev/null)
+  return 1
+}
+
+# A provider's entry toggles: "Connect: X", or "Disconnect: X" while X is up.
+vpn_label() { if provider_up "$1"; then echo "Disconnect: $2"; else echo "Connect: $2"; fi; }
+
+bar_refresh() { pkill -RTMIN+7 waybar 2>/dev/null || true; }
+
+vpn_off() {
+  if pkexec "$VPN" disconnect; then note "VPN off"; else note_err "VPN disconnect failed"; fi
+  bar_refresh
+}
+
 vpn_menu() {
   local choice
   choice="$(printf '%s\n' \
-    "Connect: Proton VPN" \
-    "Connect: Surfshark" \
-    "Connect: NordVPN" \
+    "$(vpn_label proton "Proton VPN")" \
+    "$(vpn_label surfshark "Surfshark")" \
+    "$(vpn_label nord "NordVPN")" \
     "Import config…" \
     "Tor fallback" \
     "Disconnect VPN" | menu "VeloGuard VPN")" || return 0
   case "$choice" in
+    "Disconnect: "*)       vpn_off ;;
     "Connect: Proton VPN") vpn_connect proton "Proton VPN" ;;
     "Connect: Surfshark")  vpn_connect surfshark "Surfshark" ;;
     "Connect: NordVPN")    vpn_connect nord "NordVPN" ;;
     "Import config…")      "$VPN_UI" import ;;
     "Tor fallback")
-      if pkexec "$VPN" tor; then note "Tor fallback enabled"; else note "Tor setup failed"; fi ;;
-    "Disconnect VPN")
-      pkexec "$VPN" disconnect && note "VPN off" || note "VPN disconnect failed" ;;
+      if pkexec "$VPN" tor; then note "Tor fallback enabled"; else note_err "Tor setup failed"; fi ;;
+    "Disconnect VPN")      vpn_off ;;
   esac
 }
 
@@ -57,7 +87,7 @@ vpn_connect() {
   local name="$1" label="$2" rc=0
   pkexec "$VPN" connect "$name" || rc=$?
   case "$rc" in
-    0) note "VPN up: $label (now the default)" ;;
+    0) note "VPN up: $label (now the default)"; bar_refresh ;;
     5) # the app is there but wants you: sign in / connect in it
        "$VPN" app "$name" open || true
        if [ "$name" = surfshark ]; then
@@ -66,7 +96,7 @@ vpn_connect() {
          note "Sign in to $label (once) — after that VeloGuard connects it for you, auto-protect included"
        fi ;;
     2) vpn_offer_app "$name" "$label" ;;
-    *) note "VPN failed (code $rc) — try: veloguard-vpn status" ;;
+    *) note_err "VPN failed (code $rc) — try: veloguard-vpn status" ;;
   esac
 }
 
@@ -92,7 +122,7 @@ vpn_offer_app() {  # no app, no WireGuard config: install the official app?
         "$VPN" app "$name" open || true
         note "$label installed — sign in once; then VPN ▸ Connect: $label connects with one click"
       else
-        note "$label install failed (offline?) — try: veloguard-vpn app $name install"
+        note_err "$label install failed (offline?) — try: veloguard-vpn app $name install"
       fi ;;
     *)
       url="$("$VPN" url "$name" 2>/dev/null || true)"
@@ -111,8 +141,9 @@ trust_toggle() {
   r="$(pkexec "$WIFI_TRUST" "$action" 2>/dev/null || true)"
   case "$r" in
     trusted)          note "Wi-Fi trusted — no auto-VPN" ;;
+    trusted-vpn-off)  note "Wi-Fi trusted — the auto-VPN is off now"; bar_refresh ;;
     untrusted)        note "Wi-Fi untrusted — VPN connecting" ;;
-    untrusted-no-vpn) note "Wi-Fi untrusted — but no VPN came up (VPN… to connect or set one up)" ;;
+    untrusted-no-vpn) note_err "Wi-Fi untrusted — but no VPN came up (VPN… to connect or set one up)" ;;
     *)                note "Wi-Fi trust: $action ($ssid)" ;;
   esac
 }
@@ -132,14 +163,18 @@ top_menu() {
     "VPN…" \
     "$trust_label" \
     "AI agent…" \
+    "Switch AI agent…" \
+    "Ask an AI agent about an error…" \
     "Toggle Bulgarian Mode" \
     "Guard status" \
     "Power menu…" | menu "🛡 VeloGuard")" || return 0
   case "$choice" in
     "VPN…")                 vpn_menu ;;
     "AI agent…")            veloguard-agent ;;
+    "Switch AI agent…")     veloguard-agent pick ;;
+    "Ask an AI agent about an error…") veloguard-agent ask ;;
     "Toggle Bulgarian Mode")
-      "$BGMODE" toggle || note "Bulgarian Mode failed — run: veloguard-bulgarian-mode selftest" ;;
+      "$BGMODE" toggle || note_err "Bulgarian Mode failed — run: veloguard-bulgarian-mode selftest" ;;
     "Guard status")
       note "$(veloguard status 2>/dev/null | head -n 20 || echo 'guard status unavailable')" ;;
     "Power menu…")          veloguard-powermenu ;;

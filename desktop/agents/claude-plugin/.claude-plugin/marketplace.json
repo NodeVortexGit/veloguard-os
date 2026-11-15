@@ -1,0 +1,14 @@
+{
+  "name": "veloguard",
+  "owner": {
+    "name": "VeloGuardOS"
+  },
+  "description": "VeloGuardOS's own plugins for Claude Code \u2014 shipped with the OS in /usr/share/veloguard/agents/claude-plugin.",
+  "plugins": [
+    {
+      "name": "veloguard",
+      "source": "./veloguard",
+      "description": "VeloGuardOS for Claude Code: the guard's tools, its rules, a check on every command, and errors and incidents handed to you."
+    }
+  ]
+}

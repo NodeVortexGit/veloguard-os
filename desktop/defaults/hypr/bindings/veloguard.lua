@@ -2,6 +2,7 @@
 hl.bind("SUPER + SHIFT + G", hl.dsp.exec_cmd("veloguard-guard-menu"),     { description = "Guard menu" })
 hl.bind("SUPER + SHIFT + V", hl.dsp.exec_cmd("veloguard-guard-menu vpn"), { description = "VPN" })
 hl.bind("SUPER + SHIFT + A", hl.dsp.exec_cmd("veloguard-agent"),          { description = "AI agent" })
+hl.bind("SUPER + SHIFT + E", hl.dsp.exec_cmd("veloguard-agent ask"),      { description = "Ask an AI agent about an error" })
 hl.bind("SUPER + ESCAPE",    hl.dsp.exec_cmd("veloguard-powermenu"),      { description = "Power menu" })
 hl.bind("XF86PowerOff",      hl.dsp.exec_cmd("veloguard-powermenu"),      { locked = true })
 hl.bind("SUPER + SHIFT + T", hl.dsp.exec_cmd("veloguard-theme menu"),     { description = "Theme" })

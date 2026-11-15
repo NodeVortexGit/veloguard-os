@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# veloguard-quickpanel — the top bar's quick panel (swaync's control centre:
+# Wi-Fi, Bluetooth, VPN, airplane mode, night light, do-not-disturb, volume and
+# brightness sliders, media, notifications). Super alone, Super+U, or the
+# bar's  button. Falls back to the guard menu if swaync isn't running.
+if command -v swaync-client >/dev/null 2>&1 && swaync-client -t -sw >/dev/null 2>&1; then exit 0; fi
+exec veloguard-guard-menu

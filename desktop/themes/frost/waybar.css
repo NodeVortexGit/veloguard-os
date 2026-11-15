@@ -1,0 +1,10 @@
+/* Frost theme — Waybar colors (frosted: the bar is translucent, Hyprland blurs behind it) */
+@define-color background rgba(10, 10, 18, 0.55);
+@define-color solid #0a0a12;
+@define-color foreground #d8dcea;
+@define-color accent #3b5bd9;
+@define-color accent2 #6b9bff;
+@define-color muted #6a7290;
+@define-color ok #7ee0a8;
+@define-color warn #f2c66d;
+@define-color alert #f26d7d;

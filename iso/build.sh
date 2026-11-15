@@ -68,6 +68,9 @@ if ! ls "$REPO/iso/pkgs/"hyprland-multicursor-[0-9]*.pkg.tar.zst >/dev/null 2>&1
 fi
 install -d "$PROFILE/airootfs/usr/share/veloguard/repo"
 cp "$REPO/iso/pkgs/"hyprland-multicursor-[0-9]*.pkg.tar.zst "$PROFILE/airootfs/usr/share/veloguard/repo/"
+# Albert (the launcher; AUR-only, built from iso/pkgs-src/albert) — kept on the
+# image for the same reason.
+cp "$REPO/iso/pkgs/"albert-[0-9]*.pkg.tar.zst "$PROFILE/airootfs/usr/share/veloguard/repo/" 2>/dev/null || true
 
 # 4. our tree into the live root
 mkdir -p "$PROFILE/airootfs/opt"
@@ -94,13 +97,15 @@ cp -r "$REPO/desktop/agents"   "$PROFILE/airootfs/usr/share/veloguard/agents"
 # The desktop package set, so a headless install knows what to remove.
 install -Dm644 "$REPO/desktop/packages.desktop" "$PROFILE/airootfs/usr/share/veloguard/packages.desktop"
 cp -r "$REPO/desktop/skel/.config/." "$PROFILE/airootfs/etc/skel/.config/"
+# ~/.local too (Albert's theme link into the active VeloGuard theme)
+[ -d "$REPO/desktop/skel/.local" ] && cp -a "$REPO/desktop/skel/.local" "$PROFILE/airootfs/etc/skel/"
 for b in "$REPO/desktop/bin/"*; do
   install -Dm755 "$b" "$PROFILE/airootfs/usr/local/bin/$(basename "$b")"
 done
 # Seed the active-theme symlink so Waybar/mako/hyprland resolve a theme on the
 # very first login (useradd copies /etc/skel, symlinks included).
 mkdir -p "$PROFILE/airootfs/etc/skel/.config/veloguard"
-ln -sfn /usr/share/veloguard/themes/veloguard \
+ln -sfn /usr/share/veloguard/themes/frost \
   "$PROFILE/airootfs/etc/skel/.config/veloguard/current"
 
 # 4b/5b. KEEP SCRIPTS EXECUTABLE: mkarchiso copies airootfs with
@@ -113,6 +118,7 @@ ln -sfn /usr/share/veloguard/themes/veloguard \
   for p in "$PROFILE/airootfs/opt/veloguard/bin/"* \
            "$PROFILE/airootfs/opt/veloguard/provision/"* \
            "$PROFILE/airootfs/opt/veloguard/"*.sh \
+           "$PROFILE/airootfs/usr/share/veloguard/agents/bin/"* \
            "$PROFILE/airootfs/usr/local/bin/"veloguard-*; do
     [ -f "$p" ] || continue
     case "$p" in *.service|*.timer|*.md) continue ;; esac

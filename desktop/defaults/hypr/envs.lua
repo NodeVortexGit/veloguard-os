@@ -36,3 +36,9 @@ hl.config({
   xwayland = { force_zero_scaling = true },
   ecosystem = { no_update_news = true },
 })
+
+-- Japanese input (fcitx5 + Mozc, the jp keyboard layout — Super+Space).
+-- GTK_IM_MODULE is left unset on Wayland (GTK talks text-input directly).
+hl.env("XMODIFIERS", "@im=fcitx")
+hl.env("QT_IM_MODULE", "fcitx")
+hl.env("SDL_IM_MODULE", "fcitx")

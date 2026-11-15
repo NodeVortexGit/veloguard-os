@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# sudo, for AI agents on VeloGuardOS. veloguard-agent puts this directory first
+# on an agent's PATH, so when the agent runs `sudo …` the command is shown to
+# you with Approve / Deny instead of failing on a password prompt it can't
+# answer ("a terminal is required to read the password"). Approved → it runs
+# as root and the agent gets its output and exit status, like real sudo.
+#
+# Understood: sudo [-n -E -H -S -A -k -P] [-u root] [VAR=value …] COMMAND …,
+# -v / -K (no-ops: nothing is cached — each command is asked for), -l, -V.
+# Refused: -i / -s (an interactive root shell can't be approved command by
+# command) and other users than root.
+set -uo pipefail
+user=root; read_pw=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -u|--user)   [ $# -ge 2 ] || { echo "sudo: option requires an argument -- 'u'" >&2; exit 1; }
+                 user="$2"; shift 2 ;;
+    -u?*)        user="${1#-u}"; shift ;;
+    --user=*)    user="${1#*=}"; shift ;;
+    -S|--stdin)  read_pw=1; shift ;;
+    -n|--non-interactive|-E|--preserve-env|--preserve-env=*|-H|--set-home|-A|--askpass|-k|--reset-timestamp|-P|--preserve-groups) shift ;;
+    -v|--validate|-K|--remove-timestamp) exit 0 ;;
+    -l|--list)   echo "VeloGuard: every root command an agent runs is shown to you for Approve/Deny."; exit 0 ;;
+    -V|--version) echo "sudo (VeloGuard agent approval → veloguard-elevate)"; exit 0 ;;
+    -h|--help)   sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -i|--login|-s|--shell)
+      echo "sudo: an interactive root shell can't be approved command by command — run each command with sudo" >&2; exit 1 ;;
+    --)          shift; break ;;
+    -?*)         echo "sudo (VeloGuard): unsupported option $1" >&2; exit 1 ;;
+    *)           break ;;
+  esac
+done
+case "$user" in root|0|'#0') ;; *) echo "sudo (VeloGuard): only root is supported, not '$user'" >&2; exit 1 ;; esac
+# `sudo -S` gets the password on stdin; there is none to check here — drop that
+# line so it doesn't end up in the command's input.
+[ "$read_pw" -eq 1 ] && { IFS= read -r _ || true; }
+envs=()
+while [ $# -gt 0 ] && [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do envs+=("$1"); shift; done
+[ $# -gt 0 ] || { echo "usage: sudo COMMAND [ARGS...]" >&2; exit 1; }
+[ ${#envs[@]} -eq 0 ] || set -- env "${envs[@]}" "$@"
+exec veloguard-elevate --agent "${VELOGUARD_AGENT:-an AI agent}" -- "$@"

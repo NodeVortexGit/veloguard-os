@@ -7,9 +7,11 @@ local inactive = "rgba(595959aa)"
 
 hl.config({
   general = {
-    gaps_in = 5,
-    gaps_out = 10,
-    border_size = 2,
+    -- No gaps (the person's call: they hate gaps). Themes may tint the
+    -- border; none bring gaps back.
+    gaps_in = 0,
+    gaps_out = 0,
+    border_size = 1,
     col = { active_border = active, inactive_border = inactive },
     resize_on_border = false,
     allow_tearing = false,
@@ -18,21 +20,32 @@ hl.config({
 
   decoration = {
     rounding = 0,
-    shadow = {
-      enabled = true,
-      range = 2,
-      render_power = 3,
-      color = "rgba(1a1a1aee)",
-    },
+    -- Frosted glass by default: every window translucent over real blur
+    -- (the Frost theme goes further). Media and games opt out (windows.lua).
+    active_opacity = 0.92,
+    inactive_opacity = 0.86,
+    fullscreen_opacity = 1.0,
+    shadow = { enabled = false },
     blur = {
       enabled = true,
-      size = 2,
-      passes = 2,
+      size = 7,
+      passes = 3,
+      vibrancy = 0.2,
+      noise = 0.012,
+      new_optimizations = true,
+      ignore_opacity = true,
+      xray = false,
+      popups = true,
       special = true,
-      brightness = 0.60,
-      contrast = 0.75,
+      brightness = 0.85,
+      contrast = 1.0,
     },
   },
+
+  -- Zero trust for the screen: a program that wants to capture it (screenshots,
+  -- screen sharing, colour pickers) needs permission — the tools below have it,
+  -- anything else (an agent included) makes Hyprland itself ask you.
+  ecosystem = { enforce_permissions = true, no_update_news = true, no_donation_nag = true },
 
   group = {
     col = {

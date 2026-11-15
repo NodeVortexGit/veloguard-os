@@ -1,50 +1,72 @@
-// VeloGuardOS Waybar — derived from Omarchy config/waybar/config.jsonc (MIT).
-// Omarchy's omarchy-script modules are removed; the VeloGuard "custom/guard"
-// module is added and stock modules are kept. See desktop/omarchy/PROVENANCE.md.
+// VeloGuardOS Waybar — the top bar as a quick panel (Frost). Everything is
+// one click away: Wi-Fi and Bluetooth menus, volume, brightness, power
+// profile, a calendar on the clock, every AI agent's usage, the guard's
+// state — and  opens the quick panel (swaync: toggles, sliders, media,
+// notifications). Derived from Omarchy's bar (MIT; desktop/omarchy/PROVENANCE.md).
 {
   "reload_style_on_change": true,
   "layer": "top",
   "position": "top",
   "spacing": 0,
-  "height": 26,
-  "modules-left": ["custom/veloguard", "hyprland/workspaces", "niri/workspaces"],
+  "height": 30,
+  "margin": "0",
+  "modules-left": ["custom/veloguard", "hyprland/workspaces", "niri/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
   "modules-right": [
+    "custom/ai-usage",
     "custom/guard",
-    "group/tray-expander",
-    "bluetooth",
+    "hyprland/language",
     "network",
+    "bluetooth",
     "pulseaudio",
-    "cpu",
-    "battery"
+    "backlight",
+    "power-profiles-daemon",
+    "battery",
+    "group/tray-expander",
+    "custom/quickpanel"
   ],
+
+  "custom/veloguard": {
+    "format": "󰒃",
+    "on-click": "veloguard-guard-menu",
+    "on-click-right": "albert toggle",
+    "tooltip-format": "VeloGuard — guard menu (Super+Shift+G)\nRight-click: search (Super+Alt)"
+  },
   "hyprland/workspaces": {
     "on-click": "activate",
     "format": "{icon}",
-    "format-icons": {
-      "default": "",
-      "active": "󱓻"
+    "format-icons": { "default": "", "active": "󱓻" },
+    "persistent-workspaces": { "1": [], "2": [], "3": [], "4": [], "5": [] }
+  },
+  "niri/workspaces": { "format": "{icon}", "format-icons": { "default": "", "active": "󱓻" } },
+  "hyprland/window": { "format": "{title}", "max-length": 48, "separate-outputs": true, "empty-format": "" },
+
+  "clock": {
+    "format": "{:%a %d %b  %H:%M}",
+    "format-alt": "{:%A, %d %B %Y — week %V}",
+    "tooltip-format": "<tt>{calendar}</tt>",
+    "calendar": {
+      "mode": "month", "mode-mon-col": 3, "weeks-pos": "left", "on-scroll": 1,
+      "format": {
+        "months": "<span color='#d8dcea'><b>{}</b></span>",
+        "days": "<span color='#a8b0c8'>{}</span>",
+        "weeks": "<span color='#6a7290'>W{}</span>",
+        "weekdays": "<span color='#6b9bff'><b>{}</b></span>",
+        "today": "<span color='#ffffff' background='#3b5bd9'><b> {} </b></span>"
+      }
     },
-    "persistent-workspaces": {
-      "1": [], "2": [], "3": [], "4": [], "5": []
-    }
+    "actions": { "on-click-right": "mode", "on-scroll-up": "shift_up", "on-scroll-down": "shift_down" }
   },
-  // The same dots on niri (the installer's niri choice runs this bar too).
-  // Each workspaces module disables itself under the other compositor.
-  "niri/workspaces": {
-    "format": "{icon}",
-    "format-icons": {
-      "default": "",
-      "active": "󱓻"
-    }
+
+  "custom/ai-usage": {
+    "exec": "veloguard-ai-usage --waybar",
+    "return-type": "json",
+    "interval": 60,
+    "signal": 8,
+    "on-click": "alacritty --class org.veloguard.usage -e sh -c 'veloguard-ai-usage --details; echo; read -rp \"Enter to close\" _'",
+    "on-click-right": "veloguard-agent"
   },
-  "custom/veloguard": {
-    "format": "🛡",
-    "on-click": "veloguard-guard-menu",
-    "on-click-right": "alacritty",
-    "tooltip-format": "VeloGuardOS menu\n\nSuper + Shift + G"
-  },
-  // The guard status module: VPN / Wi-Fi trust / staged update / guard health.
+  // VPN / Wi-Fi trust / staged update / an active root grant / guard health
   "custom/guard": {
     "exec": "veloguard-waybar-guard",
     "return-type": "json",
@@ -53,14 +75,9 @@
     "on-click": "veloguard-guard-menu",
     "on-click-right": "veloguard-guard-menu vpn"
   },
-  "cpu": {
-    "interval": 5,
-    "format": "󰍛",
-    "on-click": "alacritty -e btop"
-  },
-  "clock": {
-    "format": "{:L%A %H:%M}",
-    "format-alt": "{:L%d %B W%V %Y}",
+  "hyprland/language": {
+    "format": "{short}",
+    "on-click": "veloguard-switch-layout",
     "tooltip": false
   },
   "network": {
@@ -69,65 +86,80 @@
     "format-wifi": "{icon}",
     "format-ethernet": "󰀂",
     "format-disconnected": "󰤮",
-    "tooltip-format-wifi": "{essid} ({frequency} GHz)",
-    "tooltip-format-ethernet": "Connected",
-    "tooltip-format-disconnected": "Disconnected",
+    "tooltip-format-wifi": "{essid} · {signalStrength}% · {frequency} GHz\n{ipaddr}\nClick: Wi-Fi networks",
+    "tooltip-format-ethernet": "Wired · {ipaddr}",
+    "tooltip-format-disconnected": "Disconnected — click for Wi-Fi networks",
     "interval": 3,
-    "spacing": 1,
-    "on-click": "alacritty -e nmtui"
+    "on-click": "veloguard-wifi-menu",
+    "on-click-right": "alacritty -e nmtui"
+  },
+  "bluetooth": {
+    "format": "󰂯",
+    "format-off": "󰂲",
+    "format-disabled": "󰂲",
+    "format-connected": "󰂱 {num_connections}",
+    "format-no-controller": "",
+    "tooltip-format": "{controller_alias} · {status}",
+    "tooltip-format-connected": "{device_enumerate}",
+    "tooltip-format-enumerate-connected": "{device_alias}",
+    "tooltip-format-enumerate-connected-battery": "{device_alias} · {device_battery_percentage}%",
+    "on-click": "veloguard-bt-menu",
+    "on-click-right": "blueman-manager"
+  },
+  "pulseaudio": {
+    "format": "{icon} {volume}%",
+    "format-muted": "󰝟",
+    "format-icons": { "headphone": "󰋋", "headset": "󰋎", "default": ["󰕿", "󰖀", "󰕾"] },
+    "scroll-step": 5,
+    "on-click": "pavucontrol",
+    "on-click-right": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+    "tooltip-format": "{desc} · {volume}%"
+  },
+  "backlight": {
+    "format": "{icon}",
+    "format-icons": ["󰃞", "󰃟", "󰃠"],
+    "tooltip-format": "Brightness {percent}%",
+    "on-scroll-up": "brightnessctl s 5%+",
+    "on-scroll-down": "brightnessctl s 5%-"
+  },
+  "power-profiles-daemon": {
+    "format": "{icon}",
+    "tooltip-format": "Power profile: {profile}",
+    "format-icons": { "performance": "󰓅", "balanced": "󰾅", "power-saver": "󰾆", "default": "󰾅" }
   },
   "battery": {
-    "format": "{capacity}% {icon}",
-    "format-discharging": "{icon}",
-    "format-charging": "{icon}",
-    "format-plugged": "",
-    "format-icons": {
-      "charging": ["󰢜", "󰂆", "󰂇", "󰂈", "󰢝", "󰂉", "󰢞", "󰂊", "󰂋", "󰂅"],
-      "default": ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
-    },
-    "format-full": "󰂅",
-    "tooltip-format-discharging": "{power:>1.0f}W↓ {capacity}%",
-    "tooltip-format-charging": "{power:>1.0f}W↑ {capacity}%",
+    "format": "{icon} {capacity}%",
+    "format-charging": "󰂄 {capacity}%",
+    "format-plugged": "󰚥",
+    "format-full": "󰁹",
+    "format-icons": ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
+    "tooltip-format-discharging": "{power:>1.0f} W ↓ · {time}",
+    "tooltip-format-charging": "{power:>1.0f} W ↑ · {time}",
     "interval": 5,
     "on-click": "veloguard-powermenu",
     "states": { "warning": 20, "critical": 10 }
   },
-  "bluetooth": {
-    "format": "",
-    "format-off": "󰂲",
-    "format-disabled": "󰂲",
-    "format-connected": "󰂱",
-    "format-no-controller": "",
-    "tooltip-format": "Devices connected: {num_connections}",
-    "on-click": "blueman-manager"
-  },
-  "pulseaudio": {
-    "format": "{icon}",
-    "on-click": "pavucontrol",
-    "on-click-right": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
-    "tooltip-format": "Playing at {volume}%",
-    "scroll-step": 5,
-    "format-muted": "",
-    "format-icons": {
-      "headphone": "",
-      "headset": "",
-      "default": ["", "", ""]
-    }
-  },
   "group/tray-expander": {
     "orientation": "inherit",
-    "drawer": {
-      "transition-duration": 600,
-      "children-class": "tray-group-item"
-    },
+    "drawer": { "transition-duration": 400, "children-class": "tray-group-item" },
     "modules": ["custom/expand-icon", "tray"]
   },
-  "custom/expand-icon": {
-    "format": "",
-    "tooltip": false
-  },
-  "tray": {
-    "icon-size": 12,
-    "spacing": 17
+  "custom/expand-icon": { "format": "", "tooltip": false },
+  "tray": { "icon-size": 14, "spacing": 12 },
+  "custom/quickpanel": {
+    "exec": "swaync-client -swb",
+    "return-type": "json",
+    "exec-if": "which swaync-client",
+    "format": "{icon}",
+    "format-icons": {
+      "notification": "󰂚", "none": "󰂜",
+      "dnd-notification": "󰂛", "dnd-none": "󰪑",
+      "inhibited-notification": "󰂚", "inhibited-none": "󰂜",
+      "dnd-inhibited-notification": "󰂛", "dnd-inhibited-none": "󰪑"
+    },
+    "on-click": "veloguard-quickpanel",
+    "on-click-right": "swaync-client -d -sw",
+    "tooltip-format": "Quick panel (Super) — right-click: do not disturb",
+    "escape": true
   }
 }

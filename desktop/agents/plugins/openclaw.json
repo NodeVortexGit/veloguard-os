@@ -1,0 +1,52 @@
+{
+  "name": "openclaw",
+  "label": "OpenClaw",
+  "vendor": "OpenClaw",
+  "bin": "openclaw",
+  "bin_paths": [
+    "/usr/bin/openclaw",
+    "~/.local/bin/openclaw"
+  ],
+  "signin": "openclaw onboard",
+  "home": {
+    "overlay": [
+      "~/.openclaw"
+    ],
+    "files": [],
+    "ro": []
+  },
+  "env": [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY"
+  ],
+  "brain": {
+    "_why": "agent exec: one embedded turn, no Gateway, temporary state dir; plain output is only the final text on stdout.",
+    "argv": [
+      "openclaw",
+      "agent",
+      "exec",
+      "--message-file",
+      "-",
+      "--timeout",
+      "170"
+    ],
+    "model_flag": "--model",
+    "prompt": "stdin"
+  },
+  "launch": {
+    "argv": [
+      "openclaw",
+      "chat"
+    ],
+    "_why": "chat = the terminal UI, local (no Gateway needed)"
+  },
+  "ask": {
+    "argv": [
+      "openclaw",
+      "chat"
+    ],
+    "prompt": "flag",
+    "prompt_flag": "--message"
+  }
+}

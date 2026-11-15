@@ -1,0 +1,50 @@
+{
+  "name": "codex",
+  "label": "Codex",
+  "vendor": "OpenAI",
+  "bin": "codex",
+  "bin_paths": [
+    "/usr/bin/codex",
+    "~/.local/bin/codex"
+  ],
+  "signin": "codex login",
+  "home": {
+    "overlay": [
+      "~/.codex"
+    ],
+    "files": [],
+    "ro": []
+  },
+  "env": [
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY"
+  ],
+  "brain": {
+    "_why": "exec is one-shot; read-only is its own sandbox (no writes, no network for commands) inside ours; --ephemeral saves no session.",
+    "argv": [
+      "codex",
+      "exec",
+      "--sandbox",
+      "read-only",
+      "--skip-git-repo-check",
+      "--ephemeral",
+      "--color",
+      "never"
+    ],
+    "model_flag": "--model",
+    "prompt": "stdin",
+    "stdin_arg": "-"
+  },
+  "launch": {
+    "argv": [
+      "codex"
+    ],
+    "_why": "the VeloGuard plugin brings the MCP tools and skill; ~/.codex/hooks.json the check"
+  },
+  "ask": {
+    "argv": [
+      "codex"
+    ],
+    "prompt": "arg"
+  }
+}

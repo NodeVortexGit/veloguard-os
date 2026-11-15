@@ -17,7 +17,7 @@
 set -euo pipefail
 
 THEMES_DIR="${VELOGUARD_THEMES_DIR:-/usr/share/veloguard/themes}"
-DEFAULT_THEME="${VELOGUARD_DEFAULT_THEME:-veloguard}"
+DEFAULT_THEME="${VELOGUARD_DEFAULT_THEME:-frost}"
 DEFAULT_BG="${VELOGUARD_DEFAULT_BG:-/usr/share/backgrounds/veloguard/default.png}"
 CURRENT="${VELOGUARD_CURRENT:-$HOME/.config/veloguard/current}"
 

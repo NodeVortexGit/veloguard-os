@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# veloguard-localpkg-check — after every pacman transaction (pacman hook
+# 95-veloguard-localpkg.hook): can the packages pacman doesn't update itself —
+# VeloGuard's Hyprland fork, Albert, NordVPN — still load their libraries?
+# Arch updates libraries continuously; now and then one changes its ABI, and a
+# program built against the old one stops starting. The running session keeps
+# working (it has the old library mapped), so this says so BEFORE you log out.
+set -u
+broken=()
+while read -r pkg; do
+  [ -n "$pkg" ] || continue
+  missing=""
+  while read -r f; do
+    [ -f "$f" ] && [ -x "$f" ] || continue
+    case "$(head -c 4 "$f" 2>/dev/null | od -An -c | tr -d ' ')" in *ELF*) ;; *) continue ;; esac
+    m="$(ldd "$f" 2>/dev/null | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')"
+    [ -n "$m" ] && missing+="$m"
+  done < <(pacman -Qlq "$pkg" 2>/dev/null | grep -E '^/usr/(bin|lib)/' | grep -vE '\.debug$')
+  [ -n "$missing" ] && broken+=("$pkg: $(echo "$missing" | tr ' ' '\n' | sort -u | tr '\n' ' ')")
+done < <(pacman -Qmq 2>/dev/null)
+STATE=/var/lib/veloguard/localpkg-broken
+if [ ${#broken[@]} -eq 0 ]; then rm -f "$STATE"; exit 0; fi
+printf '%s\n' "${broken[@]}" > "$STATE"
+msg="After this update these can't load their libraries — don't log out yet:"
+echo ":: VeloGuard: $msg" >&2
+printf '::   %s\n' "${broken[@]}" >&2
+case " ${broken[*]} " in *hyprland-multicursor*)
+  echo ":: Fix: rebuild the fork (iso/pkgs-src/hyprland-multicursor, makepkg) — or switch to stock" >&2
+  echo "::      Hyprland right now (loses only the multi-cursor feature): sudo pacman -S hyprland" >&2 ;;
+esac
+# tell the desktop too
+u="$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $3}' | head -1)"
+if [ -n "$u" ] && id "$u" >/dev/null 2>&1; then
+  uid="$(id -u "$u")"
+  runuser -u "$u" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+    notify-send -a VeloGuard -u critical "Update: don't log out yet" \
+    "$(printf '%s\n' "${broken[@]}")  — see: sudo cat $STATE" 2>/dev/null || true
+fi
+exit 0

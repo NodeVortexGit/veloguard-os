@@ -59,6 +59,9 @@ def _read_tool(name: str, args: dict) -> dict:
             return {"ok": True, "data": updater.check()}
         except updater.UpdateError as e:
             return {"ok": False, "status": "refused", "error": str(e)}
+    if name == "incidents":
+        from . import incident
+        return {"ok": True, "data": {"incidents": incident.latest(int(args.get("limit", 5)))}}
     if name == "recall":
         return {"ok": True, "data": {
             "matches": memory.SemanticMemory().recall(args.get("query", ""))}}
@@ -115,4 +118,12 @@ def execute_tool(name: str, args: dict, *, apply: bool = False,
         return {"ok": False, "status": "failed", "error": str(e)}
     engine.record(action)
     record({**base, "result": "executed", "output": out})
+    if apply and action.type in (ActionType.QUARANTINE, ActionType.KILL_QUARANTINE):
+        # A suspicious process: an incident to look into, with the agent of
+        # the person's choice ("Investigate with …" on the desktop).
+        from . import incident
+        incident.save("quarantine", f"Process {'quarantined' if action.type == ActionType.QUARANTINE else 'killed'}: "
+                      f"{action.params.get('target')}",
+                      {"tool": name, "params": action.params, "source": source, "output": out,
+                       "reason": decision.reason})
     return {"ok": True, "status": "executed", "output": out}

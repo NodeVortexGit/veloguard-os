@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# veloguard-bt-menu — Bluetooth from the bar: on/off, your paired devices
+# (connect / disconnect, battery when the device reports it), pair a new one.
+set -uo pipefail
+menu() { wofi --dmenu --insensitive --width 440 --height 380 -p "$1"; }
+note() { notify-send -a VeloGuard -u low "Bluetooth" "$1" 2>/dev/null || true; }
+if ! bluetoothctl show 2>/dev/null | grep -q 'Powered: yes'; then
+  case "$(printf '%s\n' "Turn Bluetooth on" "Bluetooth settings…" | menu 'Bluetooth is off')" in
+    "Turn Bluetooth on") rfkill unblock bluetooth 2>/dev/null; bluetoothctl power on >/dev/null && note "Bluetooth on" ;;
+    "Bluetooth settings…") exec blueman-manager ;;
+  esac; exit 0
+fi
+rows=""
+while read -r _ mac name; do
+  [ -n "$mac" ] || continue
+  info="$(bluetoothctl info "$mac" 2>/dev/null)"
+  con="  "; grep -q 'Connected: yes' <<<"$info" && con="● "
+  bat="$(sed -n 's/.*Battery Percentage: .*(\([0-9]*\)).*/ · \1%/p' <<<"$info" | head -1)"
+  rows+="${con}${name}${bat}  [${mac}]"$'\n'
+done < <(bluetoothctl devices Paired 2>/dev/null || bluetoothctl paired-devices 2>/dev/null)
+choice="$(printf '%s' "$rows"; printf '%s\n' "󰂰  Pair a new device…" "󰂲  Turn Bluetooth off" "  Bluetooth settings…")"
+choice="$(printf '%s\n' "$choice" | sed '/^$/d' | menu 'Bluetooth')" || exit 0
+case "$choice" in
+  *"Turn Bluetooth off") bluetoothctl power off >/dev/null && note "Bluetooth off"; exit 0 ;;
+  *"Bluetooth settings…"|*"Pair a new device…") exec blueman-manager ;;
+esac
+mac="$(sed -n 's/.*\[\([0-9A-Fa-f:]\{17\}\)\]$/\1/p' <<<"$choice")"
+[ -n "$mac" ] || exit 0
+if [[ $choice == "● "* ]]; then
+  bluetoothctl disconnect "$mac" >/dev/null && note "Disconnected"
+else
+  bluetoothctl connect "$mac" >/dev/null 2>&1 && note "Connected" || note "Couldn't connect — is the device on and nearby?"
+fi

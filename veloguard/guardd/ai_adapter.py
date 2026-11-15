@@ -12,9 +12,13 @@ Planes:
   * claude — Anthropic Messages API (needs a key; nothing but the intent leaves)
   * ollama — a LOCAL model served by Ollama (private, free; no key, no cloud)
 
-claude/ollama are OPT-IN: they only activate when the user selects them
-(`guardd use claude|ollama`, or the setup wizard). The stdlib is the only
-dependency — the adapters speak HTTP with urllib, so nothing new is vendored.
+  * <agent> — a coding agent from an agent plugin (claude-code, codex, kimi,
+             hermes, openclaw — guardd/agent_plugins.py): its CLI answers
+             one-shot, tools off where possible, always in a throwaway sandbox
+
+claude/ollama/agents are OPT-IN: they only activate when the user selects them
+(`guardd use claude|ollama|<agent>`, or the setup wizard). The stdlib is the
+only dependency — the adapters speak HTTP with urllib, so nothing new is vendored.
 """
 
 from __future__ import annotations
@@ -312,6 +316,28 @@ class OllamaAdapter(AIAdapter):
         return self._post(system, sanitize_text(user, 8000), max_tokens)
 
 
+class AgentAdapter(AIAdapter):
+    """A coding agent's CLI as the brain (see guardd/agent_plugins.py). It
+    gets exactly what the API brains get — the fixed system prompt and the
+    sanitized intent — and its answer goes through the same JSON extraction
+    and action building, so policy/consent/audit apply unchanged."""
+
+    def __init__(self, plugin: str = "", model: str | None = None, **_) -> None:
+        self.name = plugin
+        self.model = model
+
+    def _ask(self, system: str, user: str) -> str:
+        from . import agent_plugins
+        return agent_plugins.run_brain(self.name, system, user, self.model)
+
+    def parse(self, intent: str) -> Action:
+        text = self._ask(_PARSE_SYSTEM, sanitize_intent(intent))
+        return _build_action(_extract_json(text), intent)
+
+    def complete(self, system: str, user: str, max_tokens: int = 600) -> str:
+        return self._ask(system, sanitize_text(user, 8000))
+
+
 _ADAPTERS = {
     "mock": MockAdapter,
     "snn": SNNAdapter,
@@ -321,9 +347,11 @@ _ADAPTERS = {
 
 
 def get_adapter(name: str, **cfg) -> AIAdapter:
-    try:
-        cls = _ADAPTERS[name]
-    except KeyError:
-        raise ValueError(
-            f"unknown adapter: {name!r} (choices: {', '.join(_ADAPTERS)})") from None
+    cls = _ADAPTERS.get(name)
+    if cls is None:
+        from . import agent_plugins
+        if agent_plugins.get(name) is not None:
+            return AgentAdapter(**{**cfg, "plugin": name})
+        choices = [*_ADAPTERS, *agent_plugins.load_all()]
+        raise ValueError(f"unknown adapter: {name!r} (choices: {', '.join(choices)})")
     return cls(**cfg)

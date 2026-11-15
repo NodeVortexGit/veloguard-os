@@ -1,0 +1,14 @@
+// AI agents ask for root through veloguard-elevate (their `sudo`). You chose an
+// Approve/Deny click rather than a password, so polkit lets an active local
+// admin START the root helper without one — the helper itself is the approval:
+// it shows the agent, the exact command and the folder on your verified
+// session compositor and runs nothing unless you click Approve (Deny is the
+// default; every request is audited). Delete this file to require your
+// password on top of the click.
+polkit.addRule(function (action, subject) {
+    if (action.id === "org.freedesktop.policykit.exec" &&
+        action.lookup("program") === "/opt/veloguard/bin/veloguard-elevate-root" &&
+        subject.active && subject.local && subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});

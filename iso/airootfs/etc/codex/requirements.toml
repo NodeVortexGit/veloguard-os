@@ -1,0 +1,19 @@
+# VeloGuardOS — managed policy for Codex (system-wide, root-owned).
+# The guard checks Codex's shell commands and file edits before they run (the
+# same rules as every other agent: guardd/cmdguard.py). Managed hooks are
+# trusted by policy: no per-user review, and they can't be switched off from
+# inside Codex — so a steered agent can't turn its own check off.
+[features]
+hooks = true
+
+[hooks]
+managed_dir = "/usr/share/veloguard/agents/agent-plugin/veloguard/hooks"
+
+[[hooks.PreToolUse]]
+matcher = "^(Bash|apply_patch|Edit|Write)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 -I /usr/share/veloguard/agents/agent-plugin/veloguard/hooks/guard_hook.py"
+timeout = 20
+statusMessage = "VeloGuard is checking this"

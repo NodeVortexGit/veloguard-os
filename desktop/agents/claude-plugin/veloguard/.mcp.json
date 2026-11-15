@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "veloguard": {
+      "command": "veloguard-mcp",
+      "env": { "VELOGUARD_AGENT_AUTONOMY": "guarded" }
+    }
+  }
+}

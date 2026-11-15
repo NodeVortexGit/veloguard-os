@@ -1,0 +1,12 @@
+{
+  "name": "veloguard",
+  "interface": { "displayName": "VeloGuardOS" },
+  "plugins": [
+    {
+      "name": "veloguard",
+      "source": { "source": "local", "path": "./veloguard" },
+      "policy": { "installation": "INSTALLED_BY_DEFAULT", "authentication": "ON_INSTALL" },
+      "category": "Security"
+    }
+  ]
+}

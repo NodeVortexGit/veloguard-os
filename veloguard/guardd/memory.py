@@ -16,6 +16,7 @@ the same 0700 directory.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -30,7 +31,16 @@ def _db_path() -> Path:
 
 
 def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(_db_path())
+    db = _db_path()
+    c = sqlite3.connect(db)
+    # Private before the WAL files exist (SQLite gives them the db's mode):
+    # network trust, process verdicts and decisions are nobody else's business.
+    # The system store's folder is traversable by path (see tmpfiles.d), so the
+    # file itself has to say no.
+    try:
+        os.chmod(db, 0o600)
+    except OSError:
+        pass
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript("""
       CREATE TABLE IF NOT EXISTS networks(

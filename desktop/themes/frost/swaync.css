@@ -1,0 +1,8 @@
+/* Frost theme — the quick panel (swaync control centre) and notifications:
+   translucent glass, Hyprland blurs behind (layer rule "swaync-*"). */
+@define-color glass rgba(10, 10, 18, 0.62);
+@define-color glass-strong rgba(10, 10, 18, 0.80);
+@define-color fg #d8dcea;
+@define-color muted #6a7290;
+@define-color accent #3b5bd9;
+@define-color accent2 #6b9bff;

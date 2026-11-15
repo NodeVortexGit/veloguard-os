@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""veloguard-ai-usage — how much every AI agent on this machine used today.
+
+Read from each agent's own local session logs (nothing leaves the machine):
+
+  Claude Code  ~/.claude/projects/**.jsonl     exact (per response, deduplicated)
+               + the current 5-hour block
+  Codex        ~/.codex/sessions/**.jsonl       exact (token_count events)
+               + its 5-hour / weekly rate-limit use, as Codex reports it
+  everything else that logs tokens — Kimi Code, Hermes, OpenClaw,
+  Antigravity, Gemini CLI, Mistral Vibe, opencode, Qwen Code, Goose, Amp,
+  Cursor agent, Copilot CLI, Factory Droid, Crush… — read generically from
+  their session files ("≈": token fields found in the logs)
+
+  veloguard-ai-usage              # a table
+  veloguard-ai-usage --details    # the same, per agent with sessions
+  veloguard-ai-usage --waybar     # the bar module (JSON)
+  veloguard-ai-usage --json
+"""
+from __future__ import annotations
+
+import datetime as dt
+import glob
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+MAX_AGE = 36 * 3600            # only files touched recently are read
+BLOCK = 5 * 3600
+
+GENERIC = [
+    ("kimi", "Kimi Code", ["~/.kimi-code/sessions/**/*.jsonl", "~/.kimi-code/sessions/**/*.json", "~/.kimi/sessions/**/*.jsonl"]),
+    ("hermes", "Hermes", ["~/.hermes/sessions/**/*.json*", "~/.hermes/logs/**/*.jsonl", "~/.hermes/usage*.jsonl"]),
+    ("openclaw", "OpenClaw", ["~/.openclaw/agents/*/sessions/**/*.jsonl", "~/.openclaw/sessions/**/*.jsonl"]),
+    ("antigravity", "Antigravity", ["~/.gemini/antigravity/**/*.json*", "~/.antigravity/**/*.jsonl", "~/.config/Antigravity/**/sessions/**/*.json*"]),
+    ("gemini", "Gemini CLI", ["~/.gemini/tmp/**/*.json*"]),
+    ("vibe", "Mistral Vibe", ["~/.vibe/**/*.json*", "~/.config/vibe/**/*.jsonl"]),
+    ("opencode", "opencode", ["~/.local/share/opencode/storage/message/**/*.json"]),
+    ("qwen", "Qwen Code", ["~/.qwen/tmp/**/*.json*"]),
+    ("goose", "Goose", ["~/.local/share/goose/sessions/**/*.jsonl"]),
+    ("amp", "Amp", ["~/.local/share/amp/**/*.json*", "~/.amp/**/*.jsonl"]),
+    ("cursor", "Cursor agent", ["~/.cursor/**/*.jsonl"]),
+    ("copilot", "Copilot CLI", ["~/.copilot/**/*.jsonl"]),
+    ("droid", "Factory Droid", ["~/.factory/sessions/**/*.jsonl"]),
+    ("crush", "Crush", ["~/.local/share/crush/**/*.jsonl"]),
+    ("aider", "Aider", ["~/.aider/**/*.jsonl"]),
+]
+IN_KEYS = ("input_tokens", "prompt_tokens", "inputTokens", "promptTokens", "promptTokenCount", "input")
+OUT_KEYS = ("output_tokens", "completion_tokens", "outputTokens", "completionTokens",
+            "candidatesTokenCount", "output", "reasoning_output_tokens", "reasoning", "thoughtsTokenCount")
+CACHE_KEYS = ("cache_read_input_tokens", "cache_creation_input_tokens", "cached_input_tokens",
+              "cachedContentTokenCount", "cache_read", "cache_write", "read", "write")
+
+
+def today_start() -> float:
+    d = dt.datetime.now().astimezone()
+    return d.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+def ts_of(obj: dict, fallback: float) -> float:
+    for k in ("timestamp", "created_at", "createdAt", "time", "ts", "date"):
+        v = obj.get(k)
+        if isinstance(v, (int, float)):
+            return v / 1000 if v > 1e12 else float(v)
+        if isinstance(v, str):
+            try:
+                return dt.datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+    return fallback
+
+
+def recent(patterns: list[str]) -> list[str]:
+    now, out = time.time(), set()
+    for pat in patterns:
+        for f in glob.glob(os.path.expanduser(pat), recursive=True):
+            try:
+                if os.path.isfile(f) and now - os.path.getmtime(f) < MAX_AGE:
+                    out.add(f)
+            except OSError:
+                continue
+    return sorted(out)
+
+
+def lines(f: str):
+    try:
+        with open(f, errors="replace") as fh:
+            if f.endswith(".jsonl"):
+                for line in fh:
+                    line = line.strip()
+                    if line.startswith("{"):
+                        try:
+                            yield json.loads(line)
+                        except ValueError:
+                            continue
+            else:
+                d = json.load(fh)
+                if isinstance(d, list):
+                    yield from (x for x in d if isinstance(x, dict))
+                elif isinstance(d, dict):
+                    yield d
+    except (OSError, ValueError):
+        return
+
+
+def blank(name, label, exact=True):
+    return {"name": name, "label": label, "exact": exact, "input": 0, "output": 0, "cache": 0,
+            "total": 0, "sessions": set(), "last": 0.0, "block": 0, "block_reset": None, "limits": None}
+
+
+# --- Claude Code -------------------------------------------------------------
+def claude() -> dict:
+    r = blank("claude-code", "Claude Code")
+    start, seen, events = today_start(), set(), []
+    for f in recent(["~/.claude/projects/**/*.jsonl", "~/.config/claude/projects/**/*.jsonl"]):
+        mtime = os.path.getmtime(f)
+        for o in lines(f):
+            m = o.get("message") if isinstance(o.get("message"), dict) else None
+            u = m.get("usage") if m else None
+            if not isinstance(u, dict):
+                continue
+            key = (m.get("id"), o.get("requestId"))
+            if key in seen:
+                continue
+            seen.add(key)
+            t = ts_of(o, mtime)
+            tot = sum(int(u.get(k) or 0) for k in ("input_tokens", "output_tokens",
+                                                  "cache_creation_input_tokens", "cache_read_input_tokens"))
+            events.append((t, tot))
+            if t >= start:
+                r["input"] += int(u.get("input_tokens") or 0)
+                r["output"] += int(u.get("output_tokens") or 0)
+                r["cache"] += int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
+                r["sessions"].add(o.get("sessionId") or f)
+                r["last"] = max(r["last"], t)
+    # the current 5-hour block (starts at the hour of its first message)
+    events.sort()
+    bstart = None
+    for t, _ in events:
+        if bstart is None or t >= bstart + BLOCK:
+            bstart = t - (t % 3600)
+    if bstart and time.time() < bstart + BLOCK:
+        r["block"] = sum(n for t, n in events if t >= bstart)
+        r["block_reset"] = bstart + BLOCK
+    return r
+
+
+# --- Codex ---------------------------------------------------------------------
+def codex() -> dict:
+    r = blank("codex", "Codex")
+    start, latest_limits = today_start(), (0.0, None)
+    for f in recent(["~/.codex/sessions/**/*.jsonl", "~/.codex/archived_sessions/**/*.jsonl"]):
+        mtime = os.path.getmtime(f)
+        for o in lines(f):
+            p = o.get("payload") if isinstance(o.get("payload"), dict) else {}
+            if p.get("type") != "token_count":
+                continue
+            t = ts_of(o, mtime)
+            info = p.get("info") or {}
+            last = info.get("last_token_usage") or {}
+            if t >= start and last:
+                r["input"] += int(last.get("input_tokens") or 0) - int(last.get("cached_input_tokens") or 0)
+                r["cache"] += int(last.get("cached_input_tokens") or 0)
+                r["output"] += int(last.get("output_tokens") or 0)
+                r["sessions"].add(f)
+                r["last"] = max(r["last"], t)
+            if p.get("rate_limits") and t >= latest_limits[0]:
+                latest_limits = (t, p["rate_limits"])
+    r["limits"] = latest_limits[1]
+    return r
+
+
+# --- anything else that logs tokens -------------------------------------------
+def _walk_usage(o, acc, depth=0):
+    if depth > 6 or not isinstance(o, dict):
+        return
+    ins = next((o[k] for k in IN_KEYS if isinstance(o.get(k), (int, float))), None)
+    outs = [o[k] for k in OUT_KEYS if isinstance(o.get(k), (int, float))]
+    if ins is not None or outs:
+        acc["input"] += int(ins or 0)
+        acc["output"] += int(sum(outs))
+        acc["cache"] += int(sum(o[k] for k in CACHE_KEYS if isinstance(o.get(k), (int, float))))
+        cache = o.get("cache")
+        if isinstance(cache, dict):
+            acc["cache"] += int(sum(v for v in cache.values() if isinstance(v, (int, float))))
+        return
+    for k, v in o.items():
+        if k in ("usage", "tokens", "token_usage", "usageMetadata", "tokenUsage", "info", "message",
+                 "metadata", "response", "stats"):
+            _walk_usage(v, acc, depth + 1)
+
+
+def generic(name, label, patterns) -> dict:
+    r = blank(name, label, exact=False)
+    start, seen = today_start(), set()
+    for f in recent(patterns):
+        mtime = os.path.getmtime(f)
+        for o in lines(f):
+            ident = o.get("id") or o.get("message_id") or o.get("requestId")
+            if ident:
+                if (f, ident) in seen:
+                    continue
+                seen.add((f, ident))
+            if ts_of(o, mtime) < start:
+                continue
+            acc = {"input": 0, "output": 0, "cache": 0}
+            _walk_usage(o, acc)
+            if acc["input"] or acc["output"]:
+                for k in acc:
+                    r[k] += acc[k]
+                r["sessions"].add(f)
+                r["last"] = max(r["last"], ts_of(o, mtime))
+    return r
+
+
+def collect() -> list[dict]:
+    rows = [claude(), codex()] + [generic(*g) for g in GENERIC]
+    for r in rows:
+        r["total"] = r["input"] + r["output"] + r["cache"]
+        r["sessions"] = len(r["sessions"])
+    return [r for r in rows if r["total"] or r["name"] in ("claude-code", "codex")]
+
+
+def human(n: int) -> str:
+    for unit, div in (("B", 1e9), ("M", 1e6), ("k", 1e3)):
+        if n >= div:
+            return f"{n / div:.1f}{unit}".replace(".0", "")
+    return str(n)
+
+
+def limits_text(lim) -> str:
+    if not isinstance(lim, dict):
+        return ""
+    parts = []
+    for k, label in (("primary", "5h"), ("secondary", "week")):
+        v = lim.get(k)
+        if isinstance(v, dict) and v.get("used_percent") is not None:
+            wm = v.get("window_minutes")
+            label = "5h" if wm == 300 else ("week" if wm and wm >= 10000 else label)
+            parts.append(f"{label} {v['used_percent']:.0f}%")
+    return " · ".join(parts)
+
+
+def main() -> int:
+    rows = collect()
+    total = sum(r["total"] for r in rows)
+    if "--json" in sys.argv:
+        print(json.dumps(rows, default=str))
+        return 0
+    if "--waybar" in sys.argv:
+        lines_ = []
+        for r in sorted(rows, key=lambda x: -x["total"]):
+            mark = "" if r["exact"] else "≈"
+            line = f"{r['label']:<13} {mark}{human(r['total']):>7}  ({human(r['input'])} in · {human(r['output'])} out · {human(r['cache'])} cache)"
+            extra = []
+            if r["block"]:
+                reset = time.strftime("%H:%M", time.localtime(r["block_reset"]))
+                extra.append(f"5h block {human(r['block'])}, resets {reset}")
+            if limits_text(r["limits"]):
+                extra.append(f"limits {limits_text(r['limits'])}")
+            if extra:
+                line += "\n              " + " · ".join(extra)
+            lines_.append(line)
+        idle = total == 0
+        hot = any((isinstance(r["limits"], dict) and any(
+            isinstance(v, dict) and (v.get("used_percent") or 0) >= 80 for v in r["limits"].values())) for r in rows)
+        tip = ("<b>AI usage today</b> (tokens, from each agent's own logs)\n\n<tt>"
+               + ("\n".join(lines_) if lines_ else "nothing yet") + "</tt>\n\nClick: details · right-click: open your agent")
+        print(json.dumps({"text": f"󰚩 {human(total)}" if total else "󰚩",
+                          "tooltip": tip, "class": "high" if hot else ("idle" if idle else "active")}))
+        return 0
+    print(f"AI usage today — {human(total)} tokens across {sum(1 for r in rows if r['total'])} agent(s)\n")
+    print(f"  {'agent':<14}{'total':>9}{'input':>9}{'output':>9}{'cache':>9}  sessions")
+    for r in sorted(rows, key=lambda x: -x["total"]):
+        mark = " " if r["exact"] else "≈"
+        print(f"  {r['label']:<13}{mark}{human(r['total']):>9}{human(r['input']):>9}{human(r['output']):>9}"
+              f"{human(r['cache']):>9}  {r['sessions']}")
+        if "--details" in sys.argv:
+            if r["block"]:
+                print(f"      current 5h block: {human(r['block'])}, resets {time.strftime('%H:%M', time.localtime(r['block_reset']))}")
+            if limits_text(r["limits"]):
+                print(f"      rate limits (as {r['label']} reports): {limits_text(r['limits'])}")
+    print("\n  ≈ read generically from that agent's logs; exact counts for Claude Code and Codex.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

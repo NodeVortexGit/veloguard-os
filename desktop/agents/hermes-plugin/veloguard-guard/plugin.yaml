@@ -1,0 +1,6 @@
+name: veloguard-guard
+version: "0.1.0"
+description: "VeloGuardOS: the guard checks Hermes's shell, code and file-write tools before they run — switching off or rewriting the guard is refused, what malware typically does is refused with the reason (Hermes has no ask-the-person step for hooks). Same rules as the Claude Code plugin and veloguard-elevate."
+author: "VeloGuardOS"
+provides_hooks:
+  - pre_tool_call

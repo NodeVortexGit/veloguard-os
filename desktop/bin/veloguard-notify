@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#
+# veloguard-notify — a VeloGuard desktop notification that can hand what it's
+# about to an AI agent:
+#
+#   veloguard-notify TITLE [BODY]                  # plain
+#   veloguard-notify --error TITLE [BODY]          # + "Ask an AI agent"
+#   veloguard-notify --incident ID TITLE [BODY]    # + "Investigate" (the guard caught something)
+#
+# Clicking the notification asks your default agent; the button lets you pick
+# one. Either way it opens through the agent's VeloGuard plugin
+# (veloguard-agent ask), with the text handed over as data.
+set -uo pipefail
+kind=""; id=""
+case "${1:-}" in
+  --error)    kind=error; shift ;;
+  --incident) kind=incident; id="${2:-latest}"; shift 2 ;;
+esac
+title="${1:-VeloGuard}"; body="${2:-}"
+command -v notify-send >/dev/null 2>&1 || { echo "$title: $body" >&2; exit 0; }
+if [ -z "$kind" ]; then exec notify-send -a VeloGuard "$title" "$body"; fi
+
+if [ "$kind" = incident ]; then
+  urgency=critical; btn="Investigate with an AI agent…"; ask=(--incident "$id")
+else
+  urgency=normal; btn="Ask an AI agent…"; ask=(--text "$title${body:+: $body}")
+fi
+(
+  act="$(notify-send -a VeloGuard -u "$urgency" -t 20000 --wait \
+           -A "default=Ask my default agent" -A "pick=$btn" "$title" "$body" 2>/dev/null)"
+  case "$act" in
+    default) exec veloguard-agent ask --to default "${ask[@]}" ;;
+    pick)    exec veloguard-agent ask "${ask[@]}" ;;
+  esac
+) </dev/null >/dev/null 2>&1 &
+disown

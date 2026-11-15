@@ -43,9 +43,32 @@ hl.window_rule({
   center = true,
 })
 
--- Apply default opacity after apps have had a chance to opt out
+-- Media and games are never frosted: video under glass is unwatchable.
+hl.window_rule({
+  name = "opaque-media",
+  match = { class = "^(mpv|vlc|org.videolan.VLC|imv|swayimg|org.gnome.Loupe|steam_app_.*|gamescope|com.obsproject.Studio|zoom|org.kde.gwenview)$" },
+  opacity = "1.0 override 1.0 override",
+  tag = "-default-opacity",
+})
+
+-- Default opacity after apps have had a chance to opt out. Neutral here: the
+-- glass level is the theme's (decoration.active/inactive_opacity).
 hl.window_rule({
   name = "default-opacity",
   match = { tag = "default-opacity" },
-  opacity = "0.985 0.96",
+  opacity = "1.0 1.0",
 })
+
+-- Frosted layers: the bar, the quick panel and notifications (swaync), the
+-- launcher (Albert), wofi menus and the lock screen blur what's behind them.
+for _, ns in ipairs({ "waybar", "swaync-control-center", "swaync-notification-window",
+                      "albert", "wofi", "notifications", "logout_dialog" }) do
+  hl.layer_rule({ name = "frost-" .. ns, match = { namespace = ns }, blur = true, ignore_alpha = 0.15 })
+end
+
+-- Screen capture, allowed for the tools that are meant to (enforce_permissions
+-- is on in looknfeel.lua: anything else asks).
+for _, bin in ipairs({ "/usr/bin/grim", "/usr/bin/hyprpicker", "/usr/bin/wf-recorder",
+                       "/usr/lib/xdg-desktop-portal-hyprland", "/usr/bin/hyprlock", "/usr/bin/obs" }) do
+  hl.permission({ binary = bin, type = "screencopy", mode = "allow" })
+end

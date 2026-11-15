@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "python3 -I ${PLUGIN_ROOT}/hooks/guard_hook.py", "timeout": 20 } ] }
+    ]
+  }
+}

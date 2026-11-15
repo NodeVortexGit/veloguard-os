@@ -30,5 +30,6 @@ load(dir .. "looknfeel.lua")
 load(dir .. "windows.lua")
 load(dir .. "bindings/hyprland-default.lua")
 load(dir .. "bindings/veloguard.lua")
+load(dir .. "bindings/clean-config.lua")   -- the person's own keys win
 load(dir .. "nvidia.lua", true)                                  -- NVIDIA session env
 load(home .. "/.config/veloguard/current/hyprland.lua", true)     -- active theme colours

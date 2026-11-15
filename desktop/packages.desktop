@@ -21,8 +21,12 @@ qt5-wayland
 qt6-wayland
 kvantum
 
-# Bar, notifications, launcher, wallpaper, OSD
+# Bar, notifications + the quick panel (swaync), launcher (Albert — from the
+# local [veloguard] repo, iso/pkgs-src/albert; wofi for the bar's menus),
+# wallpaper, OSD. mako stays as the fallback notification daemon.
 waybar
+swaync
+albert
 mako
 wofi
 swaybg
@@ -74,3 +78,12 @@ usbutils
 # Local AI agent brain (the guard's Ollama plane; the Claude plane needs only a
 # key and talks to the API over stdlib HTTP, so no extra package for it).
 ollama
+
+# Japanese + Bulgarian input (Super+Space cycles us · bg phonetic · jp; Mozc
+# only on jp) and CJK fonts
+fcitx5
+fcitx5-mozc
+fcitx5-gtk
+fcitx5-qt
+fcitx5-configtool
+noto-fonts-cjk

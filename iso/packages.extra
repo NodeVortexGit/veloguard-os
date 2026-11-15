@@ -19,14 +19,25 @@ mesa
 
 # VeloGuard security stack (kernel-side userspace the guard drives)
 nftables
+# compressed swap in RAM (/etc/systemd/zram-generator.conf)
+zram-generator
 wireguard-tools
 bubblewrap
 tor
 # Proton VPN's official app + CLI (Arch repos): sign in once in the app and
 # `veloguard-vpn connect proton` / auto-protect connect through it. NordVPN
-# (AUR) and Surfshark (Flathub) install on demand from the VPN menu.
+# (AUR, pinned) and Surfshark (Flathub) are added by the installer's
+# shellprocess@veloguardagents step (provision/install-vpn-apps.sh).
 proton-vpn-gtk-app
 proton-vpn-cli
+
+# AI agents as the guard's brain (agent plugins, desktop/agents/plugins): Codex
+# is in [extra]; the runtimes the others install with (npm for OpenClaw, uv for
+# Kimi Code) are on the disc so only the agents themselves need the network.
+openai-codex
+nodejs
+npm
+uv
 
 # universal package formats (default apps install via flatpak on first run)
 flatpak

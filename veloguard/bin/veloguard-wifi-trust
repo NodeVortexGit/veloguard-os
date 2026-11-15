@@ -12,7 +12,8 @@
 #   veloguard-wifi-trust untrust    # current SSID → untrusted → VPN up if available
 #   (read state from the trusted-ssids file directly; this tool only WRITES)
 #
-# Exit/stdout for the UI: prints  trusted | untrusted | untrusted-no-vpn | no-wifi
+# Exit/stdout for the UI: prints  trusted | trusted-vpn-off | untrusted | untrusted-no-vpn | no-wifi
+#   trusted-vpn-off = trusted, and the VPN auto-protect had raised for it went down
 set -uo pipefail
 export VELOGUARD_STATE=/var/lib/veloguard
 HOME_DIR="${VELOGUARD_HOME:-/opt/veloguard}"
@@ -57,14 +58,15 @@ list_add() { list_del; printf '%s\n' "$ssid" >> "$LIST"; }
 case "${1:-status}" in
   trust)
     set_db trusted; list_add; chmod 644 "$LIST" 2>/dev/null || true
-    echo "trusted" ;;
+    # Only a VPN auto-protect raised goes down; one the user chose stays.
+    if [ "$("$VPN" drop-auto 2>/dev/null)" = dropped ]; then echo "trusted-vpn-off"; else echo "trusted"; fi ;;
   untrust)
     set_db untrusted; list_del; touch "$LIST"; chmod 644 "$LIST" 2>/dev/null || true
     # auto-protect: the default VPN (WireGuard profile or provider app) up.
     # Any failure — none configured (2), dead tunnel (3/4), the app wants a
     # sign-in (5) — means this Wi-Fi is NOT protected; say so, never "untrusted"
     # (which the UI reports as "VPN connecting").
-    if "$VPN" connect veloguard >/dev/null 2>&1; then echo "untrusted"
+    if "$VPN" autoconnect "$ssid" >/dev/null 2>&1; then echo "untrusted"
     else echo "untrusted-no-vpn"; fi ;;
   *)
     echo "usage: veloguard-wifi-trust trust|untrust" >&2; exit 1 ;;

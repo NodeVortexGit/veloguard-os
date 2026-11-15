@@ -30,7 +30,7 @@ if [ -n "$egress" ] && ip -d link show dev "$egress" 2>/dev/null | grep -qE '^[[
   exit 0
 fi
 
-if pkexec "$VPN" connect veloguard >/dev/null 2>&1; then
+if pkexec "$VPN" autoconnect "$ssid" >/dev/null 2>&1; then
   notify-send "VeloGuard VPN" "Untrusted Wi-Fi ($ssid) — protected through your VPN app" 2>/dev/null || true
 else
   notify-send -u critical "VeloGuard VPN" "Untrusted Wi-Fi ($ssid) and your VPN app couldn't connect — VPN… in the guard menu" 2>/dev/null || true

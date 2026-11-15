@@ -79,12 +79,27 @@ else
   update_line="Update: none staged"
 fi
 
-tooltip="🛡 VeloGuard"$'\n'"${vpn_line}"$'\n'"${wifi_line}"$'\n'"${update_line}"$'\n\n'"Click: guard menu  ·  Right-click: VPN"
+# --- An active root grant (veloguard-elevate --grant)? Shown on purpose: ----
+# unattended root is never invisible.
+grant_line=""
+GRANT_STATUS="${VELOGUARD_GRANT_STATUS:-/run/veloguard-grant.status}"
+if [ -r "$GRANT_STATUS" ]; then
+  read -r g_exp g_agent < "$GRANT_STATUS" 2>/dev/null || true
+  now=$(date +%s)
+  if [[ ${g_exp:-} =~ ^[0-9]+$ ]] && [ "$g_exp" -gt "$now" ]; then
+    left=$(( (g_exp - now) / 60 ))
+    grant_line="Root grant: ${g_agent:-an agent} — $((left / 60))h $((left % 60))m left (veloguard-elevate --revoke)"
+  fi
+fi
+
+tooltip="🛡 VeloGuard"$'\n'"${vpn_line}"$'\n'"${wifi_line}"$'\n'"${update_line}"${grant_line:+$'\n'"⚠ ${grant_line}"}$'\n\n'"Click: guard menu  ·  Right-click: VPN"
 
 # --- Decide primary class + text (priority order) ---------------------------
 # untrusted-Wi-Fi-without-VPN is the loudest state, then staged update, then VPN.
 text="🛡"
-if [ "$trusted" = "no" ] && [ -z "$vpn_iface" ]; then
+if [ -n "$grant_line" ]; then
+  cls="grant"; text="🛡 root"
+elif [ "$trusted" = "no" ] && [ -z "$vpn_iface" ]; then
   cls="untrusted"; text="🛡!"
 elif [ -n "$update_version" ]; then
   cls="update"; text="🛡⬆"

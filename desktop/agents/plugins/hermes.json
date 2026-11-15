@@ -1,0 +1,49 @@
+{
+  "name": "hermes",
+  "label": "Hermes Agent",
+  "vendor": "Nous Research",
+  "bin": "hermes",
+  "bin_paths": [
+    "~/.local/bin/hermes",
+    "~/.hermes/hermes-agent/venv/bin/hermes"
+  ],
+  "signin": "hermes setup",
+  "home": {
+    "overlay": [
+      "~/.hermes"
+    ],
+    "files": [],
+    "ro": [
+      "~/.local/bin/hermes"
+    ]
+  },
+  "env": [
+    "OPENROUTER_API_KEY",
+    "NOUS_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY"
+  ],
+  "brain": {
+    "_why": "-z/--oneshot answers once and prints ONLY the final answer.",
+    "argv": [
+      "hermes"
+    ],
+    "model_flag": "--model",
+    "prompt": "arg",
+    "prompt_flag": "-z"
+  },
+  "launch": {
+    "argv": [
+      "hermes"
+    ]
+  },
+  "ask": {
+    "argv": [
+      "hermes",
+      "chat"
+    ],
+    "prompt": "flag",
+    "prompt_flag": "-q",
+    "_why": "on a terminal -q seeds an interactive session with the first message"
+  }
+}

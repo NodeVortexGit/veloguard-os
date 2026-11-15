@@ -1,5 +1,0 @@
----
-type:       "job"
-name:       "veloguardaijob"
-interface:  "python"
-script:     "main.py"

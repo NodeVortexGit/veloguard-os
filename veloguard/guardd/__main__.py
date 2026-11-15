@@ -43,7 +43,7 @@ from . import (__version__, agent, analyst, honeypot, memory, netclass, state,
 from .actions import Action, ActionType
 from .ai_adapter import get_adapter
 from .audit import record
-from .executor import NftExecutor
+from .executor import VPN_HELPER, NftExecutor
 from .policy import Decision, PolicyEngine, Verdict
 
 VELOGUARD_DIR = Path(__file__).resolve().parent.parent
@@ -52,7 +52,9 @@ CONFIG_PATH = VELOGUARD_DIR / "config.json"
 
 CONTROL_VERBS = {"setup", "use", "model", "key", "host", "status",
                  "providers", "net", "honeypot", "analyze", "run-safe",
-                 "update", "agent", "mcp", "voice", "help"}
+                 "update", "agent", "agents", "check-command", "incidents", "integrity",
+                 "audit", "mcp", "voice",
+                 "help"}
 
 
 def _configured_adapter() -> str:
@@ -160,19 +162,55 @@ def _setup_ollama() -> None:
     print("  → Ollama plane selected — nothing leaves this machine.")
 
 
+def _setup_agent(name: str) -> None:
+    """An AI agent as the brain: install it if needed, sign in once, connect
+    VeloGuard's plugin into it (tools, rules, the check), make it active."""
+    import shutil
+    import subprocess
+    from . import agent_plugins
+    pl = agent_plugins.get(name)
+    print(f"\n  {pl.label} ({pl.vendor}) — as the brain it answers in a throwaway sandbox with "
+          "its tools off; opened (Super+Shift+A) it's its own app with VeloGuard's plugin.")
+    if not agent_plugins.status(pl)["installed"]:
+        if _ask(f"  {pl.label} isn't installed. Install it now? [Y/n]", "Y").lower() in ("y", "yes"):
+            subprocess.run(["veloguard-agent", "install", name], check=False)
+        if not agent_plugins.status(agent_plugins.get(name))["installed"]:
+            print(f"  ✗ not installed — later: veloguard-agent install {name}")
+            return
+    if shutil.which("veloguard-agent-connect"):
+        subprocess.run(["veloguard-agent-connect", name], check=False)
+    if pl.signin and _ask(f"  Sign in to {pl.label} now ({pl.signin})? [Y/n]", "Y").lower() in ("y", "yes"):
+        exe = pl.find_bin(os.path.expanduser("~"))
+        cmd = pl.signin.split("(")[0].split()
+        if exe and cmd:
+            subprocess.run([exe, *cmd[1:]], check=False)
+    state.set_active(name)
+    record({"control": "setup", "plane": name, "result": "ok"})
+    print(f"\n  → {pl.label} is the brain. Change it any time: veloguard-agent pick (or guard menu ▸ Switch AI agent…)")
+
+
 def _setup_wizard() -> int:
     print(_BANNER)
     if not sys.stdin.isatty():
         print("\033[2m(non-interactive input — reading answers from stdin)\033[0m")
 
-    plane = _choose("\nChoose your AI plane:", [
-        ("ollama", "Ollama — a LOCAL model, private & free (needs `ollama serve`)"),
-        ("claude", "Claude — Anthropic API, most capable (needs an API key)"),
-        ("snn",    "SNN    — VeloGuard's built-in local neural brain (lands soon)"),
-        ("mock",   "Mock   — offline keyword mode; deterministic, works today"),
-    ], default=4)
+    from . import agent_plugins
+    agents = []
+    for pl in agent_plugins.load_all().values():
+        st = agent_plugins.status(pl)
+        tag = "installed" if st["installed"] else "not installed yet — installs now"
+        agents.append((pl.name, f"{pl.label:<12} — AI agent ({pl.vendor}), via its plugin · {tag}"))
+    plane = _choose("\nChoose your AI plane (the brain the guard thinks with):", [
+        ("ollama", "Ollama       — a LOCAL model, private & free (needs `ollama serve`)"),
+        ("claude", "Claude API   — Anthropic API, most capable (needs an API key)"),
+        *agents,
+        ("snn",    "SNN          — VeloGuard's built-in local neural brain (lands soon)"),
+        ("mock",   "Mock         — offline keyword mode; deterministic, works today"),
+    ], default=len(agents) + 4)
 
-    if plane == "mock":
+    if state.is_agent(plane):
+        _setup_agent(plane)
+    elif plane == "mock":
         state.set_active("mock")
         record({"control": "setup", "plane": "mock", "result": "ok"})
         print("\n  → offline mock mode. Run 'guardd setup' again any time.")
@@ -184,7 +222,7 @@ def _setup_wizard() -> int:
         _setup_snn()
 
     active = state.active_provider(config_default=_configured_adapter())
-    if active in ("mock", "claude", "ollama") \
+    if (active in ("mock", "claude", "ollama") or state.is_agent(active)) \
             and _ask("\nTest the brain now? [Y/n]", "Y").lower() in ("y", "yes"):
         _test_connection(active)
 
@@ -227,13 +265,29 @@ def _vpn_up_through_guard(ex: NftExecutor, profile: str, note: str) -> str:
     decision = PolicyEngine.shared(DEFAULT_POLICY_PATH).evaluate(action)
     if decision.verdict == Verdict.DENY:
         return f"VPN blocked by policy: {decision.reason}"
+    # Was a tunnel already carrying the traffic? Then it isn't ours to drop
+    # later; only a VPN raised HERE is marked auto-started (trusting the
+    # network takes that one down again — see veloguard-vpn drop-auto).
+    was_up = ex.apply and _vpn_helper("active")
     try:
         out, result = ex.vpn_up(action.params.get("target")), "executed"
     except (RuntimeError, ValueError) as exc:
         out, result = f"VPN not applied — {exc}", "failed"
+    if ex.apply and result == "executed" and not was_up:
+        _vpn_helper("mark-auto", note)
     record({"control": "net", "action": "vpn_up", "target": profile,
             "result": result, "output": out, "note": note})
     return out
+
+
+def _vpn_helper(*args: str) -> bool:
+    """Run bin/veloguard-vpn quietly; True on exit 0. Never raises."""
+    import subprocess
+    try:
+        return subprocess.run([VPN_HELPER, *args], capture_output=True,
+                              timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def _net(rest: list[str]) -> int:
@@ -341,12 +395,19 @@ def _honeypot(rest: list[str]) -> int:
               f"  {cap['bytes']}B")
         memory.log_decision("honeypot", cap["src_ip"], "captured",
                             f"{cap['service']} {cap['bytes']}B")
+        rep = None
         if adapter:
             rep = analyst.analyze_capture(cap, adapter, provider, model)
             print(f"  ── AI diagnosis ({rep['tier']}) ──\n  "
                   + rep["report"].replace("\n", "\n  "))
-        if args.block:
-            print("  " + _auto_block(ex, cap["src_ip"]))
+        blocked = _auto_block(ex, cap["src_ip"]) if args.block else None
+        if blocked:
+            print("  " + blocked)
+        # An incident the person (and the agent they pick) can look into.
+        from . import incident
+        incident.save("honeypot",
+                      f"{cap['service']} attack from {cap['src_ip']} ({cap['bytes']} B)",
+                      {"capture": cap, "diagnosis": rep, "auto_block": blocked})
 
     print(f"VeloGuard honeypot starting on ports {ports}")
     honeypot.run(ports, on_capture)
@@ -583,6 +644,131 @@ def _run_safe(rest: list[str]) -> int:
 # CONTROL PLANE — the hot-swap commands
 # ===========================================================================
 
+def _integrity(rest: list[str]) -> int:
+    """guardd integrity update | check — the guard checks its own files."""
+    from . import incident, integrity
+    sub = rest[0] if rest else "check"
+    if os.geteuid() != 0:
+        print("integrity needs root (the baseline is root-only)", file=sys.stderr)
+        return 2
+    if sub == "update":
+        n = integrity.update()
+        record({"control": "integrity", "action": "update", "files": n, "result": "ok"})
+        print(f"baseline: {n} guard files")
+        return 0
+    r = integrity.check()
+    if r.get("no_baseline"):
+        n = integrity.update()
+        print(f"no baseline yet — took one ({n} files)")
+        return 0
+    bad = r["changed"] + r["added"] + r["removed"]
+    if not bad:
+        print("✓ the guard's files are as deployed")
+        return 0
+    record({"control": "integrity", "action": "check", "result": "mismatch", **r})
+    incident.save("integrity", f"VeloGuard's own files changed outside a deploy ({len(bad)})", r)
+    for k in ("changed", "added", "removed"):
+        for f in r[k]:
+            print(f"  {k:8} {f}")
+    return 1
+
+
+def _incidents(rest: list[str]) -> int:
+    """guardd incidents [--latest | --show ID] [--json] — what the guard caught."""
+    from . import incident
+    as_json = "--json" in rest
+    if "--latest" in rest or "--show" in rest:
+        iid = rest[rest.index("--show") + 1] if "--show" in rest and rest.index("--show") + 1 < len(rest) else "latest"
+        inc = incident.get(iid)
+        if not inc:
+            print("no such incident" if iid != "latest" else "no incidents", file=sys.stderr)
+            return 1
+        print(json.dumps(inc, indent=2, default=str) if as_json else incident.as_text(inc))
+        return 0
+    rows = incident.latest(20)
+    if as_json:
+        print(json.dumps(rows, default=str))
+    elif not rows:
+        print("no incidents — nothing caught")
+    else:
+        for r in rows:
+            print(f"  {r['id']:<34} {r['title']}")
+    return 0
+
+
+def _check_command(rest: list[str]) -> int:
+    """guardd check-command [--write PATH] [--json] [-- CMD…]: is this OK for an
+    AI agent to run (or write)? The command (or the file's new text, with
+    --write) comes from the arguments after --, else stdin. Exit 0 allow,
+    1 warn, 3 deny; --json prints {"verdict", "reason"} either way."""
+    from . import cmdguard
+    as_json = "--json" in rest
+    write = None
+    if "--write" in rest:
+        i = rest.index("--write")
+        write = rest[i + 1] if i + 1 < len(rest) else ""
+    tail = rest[rest.index("--") + 1:] if "--" in rest else []
+    text = " ".join(tail) if tail else sys.stdin.read()
+    if "--read" in rest:
+        i = rest.index("--read")
+        verdict, reason = cmdguard.check_read(rest[i + 1] if i + 1 < len(rest) else "")
+    else:
+        verdict, reason = (cmdguard.check_write(write, text) if write is not None
+                           else cmdguard.check(text))
+    if as_json:
+        print(json.dumps({"verdict": verdict, "reason": reason}))
+    elif verdict != "allow":
+        print(f"{verdict}: {reason}")
+    return {"allow": 0, "warn": 1}.get(verdict, 3)
+
+
+def _agents(rest: list[str]) -> int:
+    """guardd agents [list] | test <name> | json — the agent plugins."""
+    from . import agent_plugins
+    plugins = agent_plugins.load_all()
+    sub = rest[0] if rest else "list"
+    if sub in ("list", "json"):
+        rows = [agent_plugins.status(p) for p in plugins.values()]
+        if sub == "json":
+            print(json.dumps(rows))
+            return 0
+        active = state.active_provider(config_default=_configured_adapter())
+        for r in rows:
+            mark = "➤" if r["name"] == active else " "
+            st = "installed" if r["installed"] else "not installed"
+            if r["installed"] and not r["config"]:
+                st += " — sign in: " + r["signin"]
+            print(f"  {mark} {r['name']:<12} {r['label']:<14} {st}")
+        return 0
+    if sub == "test" and len(rest) == 2:
+        name = rest[1]
+        if name not in plugins:
+            print(f"no agent plugin {name!r} (have: {', '.join(plugins)})", file=sys.stderr)
+            return 2
+        cfg = state.adapter_config(name) if state.is_agent(name) else {}
+        try:
+            text = agent_plugins.run_brain(
+                name, "You are a connectivity check. Follow the instruction exactly.",
+                "Reply with exactly the word VELOGUARD-OK and nothing else.",
+                cfg.get("model"), timeout=120)
+        except RuntimeError as exc:
+            print(f"✗ {plugins[name].label}: {exc}")
+            return 1
+        ok = "VELOGUARD-OK" in text
+        print(("✓ " if ok else "✗ ") + f"{plugins[name].label} answered: {text[:200]!r}")
+        return 0 if ok else 1
+    if sub == "handoff" and len(rest) == 3:
+        try:
+            print(json.dumps(agent_plugins.handoff(rest[1], rest[2], sys.stdin.read())))
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        return 0
+    print("usage: guardd agents [list|json] | test <name> | handoff <name> error|incident  (text on stdin)",
+          file=sys.stderr)
+    return 2
+
+
 def _control(argv: list[str]) -> int:
     verb, rest = argv[0], argv[1:]
 
@@ -626,9 +812,33 @@ def _control(argv: list[str]) -> int:
             "claude": " (Anthropic API — needs a key)",
             "ollama": " (local model via Ollama — private, free)",
         }
-        for p in state.PROVIDERS:
-            print(f"  {p}{tags.get(p, '')}")
+        from . import agent_plugins
+        plugins = agent_plugins.load_all()
+        for p in state.providers():
+            tag = tags.get(p) or (f" ({plugins[p].label} — agent plugin)" if p in plugins else "")
+            print(f"  {p}{tag}")
         return 0
+
+    if verb == "agents":
+        return _agents(rest)
+
+    if verb == "check-command":
+        return _check_command(rest)
+
+    if verb == "incidents":
+        return _incidents(rest)
+
+    if verb == "integrity":
+        return _integrity(rest)
+
+    if verb == "audit":
+        from . import audit as audit_mod
+        if rest[:1] == ["verify"]:
+            ok, msg = audit_mod.verify()
+            print(("✓ " if ok else "✗ ") + msg)
+            return 0 if ok else 1
+        print("usage: guardd audit verify", file=sys.stderr)
+        return 2
 
     if verb == "key":
         if len(rest) < 2 or rest[0] != "claude":
@@ -654,9 +864,9 @@ def _control(argv: list[str]) -> int:
             print("usage: guardd use <provider> [model]", file=sys.stderr)
             return 2
         provider = rest[0]
-        if provider not in state.PROVIDERS:
+        if provider not in state.providers():
             print(f"unknown provider {provider!r} "
-                  f"(choices: {', '.join(state.PROVIDERS)})", file=sys.stderr)
+                  f"(choices: {', '.join(state.providers())})", file=sys.stderr)
             return 2
         state.set_active(provider)
         msg = f"active AI plane → {provider}"
@@ -672,6 +882,16 @@ def _control(argv: list[str]) -> int:
         elif provider == "ollama":
             print(f"  ℹ using local Ollama at {state.host_for('ollama')} — "
                   "make sure `ollama serve` is running and the model is pulled")
+        elif state.is_agent(provider):
+            from . import agent_plugins
+            pl = agent_plugins.get(provider)
+            st = agent_plugins.status(pl)
+            if not st["installed"]:
+                print(f"  ⚠ {pl.label} is not installed — veloguard-agent install {provider}")
+            elif not st["config"]:
+                print(f"  ⚠ {pl.label} looks signed out — sign in once: {pl.signin}")
+            print(f"  ℹ {pl.label} answers as the brain in a throwaway sandbox; "
+                  "check it with: guardd agents test " + provider)
         record({"control": "use", "provider": provider,
                 "model": state.model_for(provider) if provider != "mock" else None,
                 "result": "ok"})
@@ -682,7 +902,7 @@ def _control(argv: list[str]) -> int:
             print("usage: guardd model <provider> <model>", file=sys.stderr)
             return 2
         provider, model = rest[0], rest[1]
-        if provider not in state.PROVIDERS or provider == "mock":
+        if provider not in state.providers() or provider == "mock":
             print(f"cannot set a model for {provider!r}", file=sys.stderr)
             return 2
         state.set_model(provider, model)
@@ -695,8 +915,10 @@ def _control(argv: list[str]) -> int:
         active = state.active_provider(config_default=_configured_adapter())
         print(f"active AI plane : {active}")
         print("providers:")
-        for p in state.PROVIDERS:
-            line = f"  {'➤' if p == active else ' '} {p:<6}"
+        from . import agent_plugins
+        plugins = agent_plugins.load_all()
+        for p in state.providers():
+            line = f"  {'➤' if p == active else ' '} {p:<11}"
             if p == "snn":
                 line += f" model={state.model_for('snn') or '(default path)'}  [model code pending]"
             elif p == "claude":
@@ -704,6 +926,11 @@ def _control(argv: list[str]) -> int:
                 line += f" model={state.model_for('claude')}  ({have})"
             elif p == "ollama":
                 line += f" model={state.model_for('ollama')}  host={state.host_for('ollama')}"
+            elif p in plugins:
+                st = agent_plugins.status(plugins[p])
+                line += (f" {plugins[p].label}: "
+                         + ("installed" if st["installed"] else "not installed")
+                         + ("" if st["config"] or not st["installed"] else ", signed out?"))
             print(line)
         return 0
 

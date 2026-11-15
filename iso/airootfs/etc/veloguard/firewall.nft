@@ -1,0 +1,35 @@
+#!/usr/sbin/nft -f
+# VeloGuardOS — zero-trust network baseline: nothing reaches this machine
+# unless it asked for it. Loaded at boot by veloguard-firewall.service, before
+# the network comes up. Its own table only (no global flush): the guard's
+# blocklist (inet veloguard), WireGuard and the VPN apps keep their tables.
+#
+# Open a port for a service you run (one per line in /etc/veloguard/open-ports,
+# e.g. "tcp 1716"), then: sudo systemctl reload veloguard-firewall
+table inet veloguard_base
+delete table inet veloguard_base
+
+table inet veloguard_base {
+  set open_tcp { type inet_service; }
+  set open_udp { type inet_service; }
+
+  chain input {
+    type filter hook input priority filter; policy drop;
+    iif "lo" accept
+    ct state established,related accept
+    ct state invalid drop
+    # IPv6 doesn't work without neighbour discovery and router adverts
+    meta l4proto ipv6-icmp icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+    meta l4proto icmp icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+    # DHCP answers (v4, and v6 from a link-local server)
+    udp sport 67 udp dport 68 accept
+    ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+    # what the person opened
+    tcp dport @open_tcp accept
+    udp dport @open_udp accept
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+  }
+}
