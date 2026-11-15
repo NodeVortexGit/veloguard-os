@@ -16,8 +16,8 @@ Plan usage — each subscription's own limits, the bars on hover:
   Claude Code  session (5 h) + week   from VeloGuard's Claude Code plugin, which
                                       saves what Claude Code reports (no token read)
   Codex        5 h + week             what Codex reports with every turn (its logs)
-  Kimi Code    month + session        ~/.cache/veloguard/usage/kimi.json, when its
-                                      fetcher is enabled (needs Kimi's server token)
+  Kimi Code    session + month        veloguard-kimi-usage asks Kimi Code's own local
+                                      server (loopback, every 5 min) → kimi.json
 
   veloguard-ai-usage              # a table
   veloguard-ai-usage --details    # the same, per agent with sessions
@@ -34,6 +34,8 @@ import datetime as dt
 import glob
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -306,8 +308,27 @@ def plan_codex(cx: dict) -> dict:
     return out
 
 
+KIMI_EVERY, KIMI_SIGNED_OUT_EVERY = 5 * 60, 30 * 60
+
+
+def refresh_kimi(d: dict | None) -> None:
+    """Kimi's quota comes from its own local server (veloguard-kimi-usage) —
+    refresh in the background when the reading is stale; never block the bar."""
+    age = time.time() - (_iso((d or {}).get("updated")) or 0)
+    every = KIMI_SIGNED_OUT_EVERY if (d or {}).get("auth") else KIMI_EVERY
+    if age < every or not (shutil.which("kimi") or (HOME / ".local/bin/kimi").exists()):
+        return
+    exe = shutil.which("veloguard-kimi-usage") or str(Path(__file__).with_name("veloguard-kimi-usage"))
+    try:
+        subprocess.Popen([exe], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+
+
 def plan_kimi() -> dict:
     out = _plan("kimi", "Kimi Code")
+    d = None
     try:
         d = json.loads((CACHE / "kimi.json").read_text())
         u = {k: v for k, v in d.get("usages", {}).items() if isinstance(v, dict) and v.get("usedRatio") is not None}
@@ -321,8 +342,10 @@ def plan_kimi() -> dict:
         out["updated"] = _iso(d.get("updated"))
     except (OSError, ValueError, AttributeError):
         pass
+    refresh_kimi(d if isinstance(d, dict) else None)
     if not out["windows"]:
-        out["note"] = "not enabled yet — reading Kimi's quota needs its local server token"
+        err = (d or {}).get("error") if isinstance(d, dict) else None
+        out["note"] = err or "reading Kimi Code's quota…"
     return out
 
 
