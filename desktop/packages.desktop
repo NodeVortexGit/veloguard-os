@@ -43,9 +43,7 @@ gnome-keyring
 
 # Terminal, editor, files, thumbnails
 alacritty
-neovim
-thunar
-thunar-volman
+vim
 tumbler
 gvfs
 

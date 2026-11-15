@@ -35,7 +35,7 @@ install_arch() {                                  # the "lightweight" reference
   else
     warn "desktop/packages.desktop not found — installing a minimal Hyprland set"
     pkgs+=(hyprland waybar mako wofi swaybg swayosd sddm uwsm \
-           xdg-desktop-portal-hyprland alacritty thunar polkit-gnome)
+           xdg-desktop-portal-hyprland alacritty polkit-gnome)
   fi
   # hyprland-multicursor (our compositor) is not in Arch's repos: take it from
   # the local copy when there is one, else fall back to stock hyprland.

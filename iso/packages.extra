@@ -42,8 +42,10 @@ uv
 # universal package formats (default apps install via flatpak on first run)
 flatpak
 
-# Bulgarian Mode + media
-mpv
+# Media: VLC with every codec plugin (its FFmpeg also gives Bulgarian Mode
+# its ffplay player)
+vlc
+vlc-plugins-all
 ffmpeg
 
 # extra filesystem support

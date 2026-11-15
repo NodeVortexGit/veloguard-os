@@ -4,7 +4,7 @@
 --   hl.bind("SUPER + Q", hl.dsp.exec_cmd("kitty"))
 local mainMod = "SUPER"
 local terminal = "alacritty"
-local fileManager = "thunar"
+local fileManager = "flatpak run org.kde.dolphin"   -- Dolphin, the default file manager
 local menu = "wofi --show drun"
 
 local function key(k) return mainMod .. " + " .. k end

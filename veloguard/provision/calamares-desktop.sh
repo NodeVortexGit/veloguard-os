@@ -33,7 +33,7 @@ echo "=== desktop '$DE' for user '${U:-?}' — $(date -u)"
 # Kept: the editor, the keyring the VPN apps sign in with, hardware tools and
 # the local AI brain; the guard, VPN, firmware and drivers aren't desktop.
 headless() {
-  local keep='neovim|gnome-keyring|xdg-user-dirs|pciutils|usbutils|ollama' list p
+  local keep='vim|gnome-keyring|xdg-user-dirs|pciutils|usbutils|ollama' list p
   local gui=(zenity proton-vpn-gtk-app) installed=()
   systemctl set-default multi-user.target
   list=/usr/share/veloguard/packages.desktop
