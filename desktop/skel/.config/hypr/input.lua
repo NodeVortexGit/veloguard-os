@@ -11,7 +11,10 @@ hl.config({
     repeat_delay = 250,
     numlock_by_default = true,
     touchpad = {
-      clickfinger_behavior = true,
+      -- Right click = press the touchpad's bottom-right corner (or tap with two
+      -- fingers). true would make it a two-finger *press* instead, and the
+      -- corner a plain left click.
+      clickfinger_behavior = false,
       scroll_factor = 0.4,
     },
   },
