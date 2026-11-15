@@ -37,14 +37,11 @@ fi
 # Current SSID, unescaped: `nmcli -t` writes ':' inside an SSID as '\:' and
 # '\' as '\\'. The trusted-ssids list stores the real SSID (veloguard-wifi-trust
 # unescapes the same way), so an escaped compare never matched e.g. "Cafe:Guest".
-current_ssid() {
-  nmcli -t -f active,ssid dev wifi 2>/dev/null \
-    | awk -F: '$1=="yes"{print substr($0,5); exit}' \
-    | sed -e 's/\\\(.\)/\1/g'
-}
-ssid=""
-if command -v nmcli >/dev/null 2>&1; then
-  ssid="$(current_ssid)"
+# Wi-Fi or wired, as the guard sees it (veloguard-netid): the trust key and a label.
+ssid=""; net_kind=""; net_label=""
+if [ -x /opt/veloguard/bin/veloguard-netid ]; then
+  IFS=$'\t' read -r net_kind ssid net_label _ _ < <(/opt/veloguard/bin/veloguard-netid 2>/dev/null) || true
+  case "$net_kind" in wifi|wired) ;; *) ssid="" ;; esac
 fi
 trusted="unknown"
 if [ -n "$ssid" ]; then
@@ -68,10 +65,11 @@ if [ -n "$vpn_iface" ]; then
 else
   vpn_line="VPN: off"
 fi
+what="Wi-Fi"; [ "$net_kind" = wired ] && what="Wired"
 case "$trusted" in
-  yes)     wifi_line="Wi-Fi: $ssid (trusted)";;
-  no)      wifi_line="Wi-Fi: $ssid (untrusted)";;
-  *)       wifi_line="Wi-Fi: not connected";;
+  yes)     wifi_line="$what: ${net_label:-$ssid} (trusted)";;
+  no)      wifi_line="$what: ${net_label:-$ssid} (untrusted)";;
+  *)       wifi_line="Network: not connected";;
 esac
 if [ -n "$update_version" ]; then
   update_line="Update: kernel $update_version staged"

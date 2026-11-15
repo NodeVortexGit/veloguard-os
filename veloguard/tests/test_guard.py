@@ -917,5 +917,62 @@ class Handoff(unittest.TestCase):
             self.assertLess(len(k["clipboard"]), 8000)               # capped
 
 
+
+class WiredZeroTrust(unittest.TestCase):
+    """An unknown cable gets the VPN, like an unknown Wi-Fi."""
+
+    NETID = HERE.parent / "bin" / "veloguard-netid"
+
+    def netid(self, route, neigh, wifi=""):
+        d = Path(tempfile.mkdtemp(prefix="vg-netid-"))
+        (d / "ip").write_text("#!/bin/bash\ncase \"$*\" in\n"
+                              f"  *'-4 route show default'*) echo '{route}' ;;\n"
+                              "  *'-6 route show default'*) echo '[]' ;;\n"
+                              f"  *'neigh show'*) echo '{neigh}' ;;\nesac\n")
+        (d / "wifi.txt").write_text(wifi + "\n" if wifi else "")   # nmcli's own escaping, verbatim
+        (d / "nmcli").write_text("#!/bin/bash\ncase \"$*\" in\n"
+                                 f"  *'dev wifi list'*) cat '{d}/wifi.txt' ;;\n"
+                                 "  *) echo 'enp0s31f6:Wired connection 1' ;;\nesac\n")
+        (d / "ping").write_text("#!/bin/bash\nexit 0\n")
+        for f in d.iterdir():
+            f.chmod(0o755)
+        r = subprocess.run([sys.executable, str(self.NETID)], capture_output=True, text=True,
+                           timeout=20, env={"PATH": f"{d}:/usr/bin:/bin"})
+        return r.stdout.rstrip("\n").split("\t")
+
+    def test_wired_is_keyed_by_the_router(self):
+        route = '[{"dst":"default","gateway":"192.168.1.1","dev":"enp0s31f6","metric":100},{"dst":"default","dev":"wg0","metric":50}]'
+        neigh = '[{"dst":"192.168.1.1","lladdr":"AA:BB:CC:11:22:33"}]'
+        self.assertEqual(self.netid(route, neigh)[:4], ["wired", "wired:aa:bb:cc:11:22:33", "Wired connection 1", "wired"])
+
+    def test_unidentifiable_wired_is_unknown(self):
+        route = '[{"dst":"default","gateway":"10.0.0.1","dev":"enp0s31f6","metric":100}]'
+        self.assertEqual(self.netid(route, "[]")[1], "wired:unknown")
+
+    def test_wifi_stays_keyed_by_ssid(self):
+        route = '[{"dst":"default","gateway":"192.168.1.1","dev":"wlan0","metric":600}]'
+        self.assertEqual(self.netid(route, "[]", "yes:WPA2:Cafe\\:Guest")[:2], ["wifi", "Cafe:Guest"])
+
+    def test_classifier_fails_safe_on_cables(self):
+        d = Path(tempfile.mkdtemp(prefix="vg-wired-"))
+        with mock.patch.dict(os.environ, {"VELOGUARD_STATE": str(d)}):
+            from guardd import memory, netclass
+            self.assertEqual(netclass.classify("wired:aa:bb:cc:11:22:33", None, "wired")[0], "unknown")
+            self.assertEqual(netclass.classify("wired:unknown", None, "wired")[0], "untrusted")
+            memory.set_network_trust("wired:aa:bb:cc:11:22:33", None, "wired", "trusted")
+            self.assertEqual(netclass.classify("wired:aa:bb:cc:11:22:33", None, "wired")[0], "trusted")
+
+    def test_an_unidentifiable_cable_cant_be_trusted(self):
+        home = Path(tempfile.mkdtemp(prefix="vg-wt-"))
+        (home / "bin").mkdir()
+        stub = home / "bin" / "veloguard-netid"
+        stub.write_text("#!/bin/bash\nprintf 'wired\\twired:unknown\\tWired connection 1\\twired\\tenp0s31f6\\n'\n")
+        stub.chmod(0o755)
+        r = subprocess.run(["bash", str(HERE.parent / "bin" / "veloguard-wifi-trust"), "trust"],
+                           capture_output=True, text=True, timeout=20,
+                           env={"PATH": "/usr/bin:/bin", "VELOGUARD_HOME": str(home)})
+        self.assertEqual(r.stdout.strip(), "no-id")
+
+
 if __name__ == "__main__":
     unittest.main()

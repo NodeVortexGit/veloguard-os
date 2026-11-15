@@ -24,10 +24,14 @@ note_err() { veloguard-notify --error "VeloGuard" "$1" 2>/dev/null || notify-sen
 # Current SSID, unescaped: `nmcli -t` writes ':' inside an SSID as '\:' and
 # '\' as '\\'. The trusted-ssids list stores the real SSID (veloguard-wifi-trust
 # unescapes the same way), so an escaped compare never matched e.g. "Cafe:Guest".
-current_ssid() {
-  nmcli -t -f active,ssid dev wifi 2>/dev/null \
-    | awk -F: '$1=="yes"{print substr($0,5); exit}' \
-    | sed -e 's/\\\(.\)/\1/g'
+# This network, Wi-Fi or wired (veloguard-netid): kind key label security iface.
+# The key is what trust is stored under — the SSID, or "wired:<gateway MAC>".
+netid() { /opt/veloguard/bin/veloguard-netid "$@" 2>/dev/null; }
+current_ssid() {   # the trust key of this network (SSID or wired:<MAC>), "" offline
+  netid | awk -F'\t' '$1=="wifi"||$1=="wired"{print $2; exit}'
+}
+current_label() {  # "Wi-Fi (Nasko1_5G)" / "wired network (Wired connection 1)"
+  netid | awk -F'\t' '$1=="wifi"{print "Wi-Fi (" $3 ")"; exit} $1=="wired"{print "wired network (" $3 ")"; exit}'
 }
 
 # Is <provider> carrying the traffic right now? Read as the user, no privilege:
@@ -133,30 +137,31 @@ vpn_offer_app() {  # no app, no WireGuard config: install the official app?
 
 trust_toggle() {
   local ssid; ssid="$(current_ssid)"
-  if [ -z "$ssid" ]; then note "Not on Wi-Fi"; return 0; fi
+  if [ -z "$ssid" ]; then note "Not connected to a network"; return 0; fi
   local action="trust" r
   if [ -r "$TRUSTED_LIST" ] && grep -Fxq -- "$ssid" "$TRUSTED_LIST" 2>/dev/null; then
     action="untrust"
   fi
   r="$(pkexec "$WIFI_TRUST" "$action" 2>/dev/null || true)"
   case "$r" in
-    trusted)          note "Wi-Fi trusted — no auto-VPN" ;;
-    trusted-vpn-off)  note "Wi-Fi trusted — the auto-VPN is off now"; bar_refresh ;;
-    untrusted)        note "Wi-Fi untrusted — VPN connecting" ;;
-    untrusted-no-vpn) note_err "Wi-Fi untrusted — but no VPN came up (VPN… to connect or set one up)" ;;
-    *)                note "Wi-Fi trust: $action ($ssid)" ;;
+    trusted)          note "Network trusted — no auto-VPN" ;;
+    trusted-vpn-off)  note "Network trusted — the auto-VPN is off now"; bar_refresh ;;
+    untrusted)        note "Network untrusted — VPN connecting" ;;
+    untrusted-no-vpn) note_err "Network untrusted — but no VPN came up (VPN… to connect or set one up)" ;;
+    no-id)            note_err "Can't identify this wired network (no router to recognise it by) — it stays untrusted, the VPN stays on" ;;
+    *)                note "Network trust: $action ($ssid)" ;;
   esac
 }
 
 top_menu() {
-  local ssid trust_label choice
-  ssid="$(current_ssid)"
+  local ssid what trust_label choice
+  ssid="$(current_ssid)"; what="$(current_label)"
   if [ -n "$ssid" ] && [ -r "$TRUSTED_LIST" ] && grep -Fxq -- "$ssid" "$TRUSTED_LIST" 2>/dev/null; then
-    trust_label="Untrust this Wi-Fi ($ssid)"
+    trust_label="Untrust this $what"
   elif [ -n "$ssid" ]; then
-    trust_label="Trust this Wi-Fi ($ssid)"
+    trust_label="Trust this $what"
   else
-    trust_label="Trust this Wi-Fi (not connected)"
+    trust_label="Trust this network (not connected)"
   fi
 
   choice="$(printf '%s\n' \

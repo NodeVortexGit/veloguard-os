@@ -18,9 +18,10 @@ VPN=/usr/local/bin/veloguard-vpn
 id -nG | grep -qw wheel || exit 0            # the passwordless polkit rule is wheel-only
 sleep 10                                     # let NetworkManager + the session bus settle
 
-ssid="$(nmcli -t -f active,ssid dev wifi 2>/dev/null \
-  | awk -F: '$1=="yes"{print substr($0,5); exit}' | sed -e 's/\\\(.\)/\1/g')"
-[ -n "$ssid" ] || exit 0
+# Wi-Fi or wired (veloguard-netid): the network's trust key — an unknown cable
+# is protected just like an unknown Wi-Fi.
+IFS=$'\t' read -r kind ssid label _ _ < <(/opt/veloguard/bin/veloguard-netid --resolve 2>/dev/null)
+case "${kind:-}" in wifi|wired) ;; *) exit 0 ;; esac
 if [ -r "$TRUSTED" ] && grep -Fxq -- "$ssid" "$TRUSTED"; then exit 0; fi
 # Already protected = the default route leaves through a WireGuard/tun
 # device. Any tunnel isn't enough: a mesh VPN (NetBird's wt0, Tailscale,
@@ -31,7 +32,7 @@ if [ -n "$egress" ] && ip -d link show dev "$egress" 2>/dev/null | grep -qE '^[[
 fi
 
 if pkexec "$VPN" autoconnect "$ssid" >/dev/null 2>&1; then
-  notify-send "VeloGuard VPN" "Untrusted Wi-Fi ($ssid) — protected through your VPN app" 2>/dev/null || true
+  notify-send "VeloGuard VPN" "Untrusted network (${label:-$ssid}) — protected through your VPN app" 2>/dev/null || true
 else
-  notify-send -u critical "VeloGuard VPN" "Untrusted Wi-Fi ($ssid) and your VPN app couldn't connect — VPN… in the guard menu" 2>/dev/null || true
+  notify-send -u critical "VeloGuard VPN" "Untrusted network (${label:-$ssid}) and your VPN app couldn't connect — VPN… in the guard menu" 2>/dev/null || true
 fi

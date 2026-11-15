@@ -26,11 +26,13 @@ mkdir -p "$VELOGUARD_STATE" 2>/dev/null || true
 # `nmcli -t` writes a literal ':' in an SSID as '\:' (and '\' as '\\'), so
 # splitting on ':' mis-parsed e.g. "Cafe:Guest" — and SSIDs are chosen by
 # whoever runs the access point. SECURITY never contains ':'.
-line="$(nmcli -t -f ACTIVE,SECURITY,SSID dev wifi 2>/dev/null | awk -F: '$1=="yes"{print; exit}')"
-rest="${line#yes:}"
-sec="${rest%%:*}"
-ssid="$(printf '%s' "${rest#*:}" | sed -e 's/\\\(.\)/\1/g')"
-[ -n "$ssid" ] || { echo "no-wifi"; exit 0; }
+# Wi-Fi or wired (veloguard-netid): trust is stored under the network's key —
+# the SSID, or "wired:<gateway MAC>" for a cable. A wired network whose router
+# can't be identified ("wired:unknown") can't be trusted: "no-id".
+IFS=$'\t' read -r kind key label sec iface < <("$HOME_DIR/bin/veloguard-netid" --resolve 2>/dev/null)
+case "${kind:-}" in wifi|wired) ;; *) echo "no-wifi"; exit 0 ;; esac
+[ "$key" != "wired:unknown" ] || { echo "no-id"; exit 0; }
+ssid="$key"; sec="${sec:-open}"
 
 # write to the guard's trust DB (netclass/netwatch read this). SSID via env →
 # never interpolated into code (it's attacker-controlled).

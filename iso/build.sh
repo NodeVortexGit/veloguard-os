@@ -134,7 +134,7 @@ ln -sfn /usr/share/veloguard/themes/frost \
 mkdir -p "$PROFILE/airootfs/usr/local/bin"
 for b in veloguard veloguard-install veloguard-install-gui veloguard-vpn veloguard-vpn-ui \
          veloguard-wifi-doctor veloguard-wifi-autodetect veloguard-wifi-trust \
-         veloguard-update veloguard-netwatch veloguard-bulgarian-mode veloguard-mcp; do
+         veloguard-update veloguard-netwatch veloguard-netid veloguard-bulgarian-mode veloguard-mcp; do
   ln -sf "/opt/veloguard/bin/$b" "$PROFILE/airootfs/usr/local/bin/$b"
 done
 install -Dm644 "$REPO/veloguard/ui/bulgarian-mode.desktop" \
