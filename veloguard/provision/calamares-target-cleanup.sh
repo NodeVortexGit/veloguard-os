@@ -50,6 +50,34 @@ for p in calamares ckbcomp archinstall; do
 done
 rm -rf /etc/calamares /usr/lib/calamares /usr/share/calamares
 
+# 5b. the live rescue toolkit. The installed system starts as a copy of the
+#     live squashfs, i.e. archiso's "releng" rescue ISO — so every install got
+#     its rescue and dial-up kit: Clonezilla & disk imaging, testdisk,
+#     memtest86+, rEFInd/syslinux/EFI shell, NFS/iSCSI/NBD network storage,
+#     exotic filesystem tools, ModemManager + ppp + wvdial, PPTP (insecure),
+#     L2TP, vpnc, OpenConnect, iwd… ~110 MB nobody's desktop uses. The live USB
+#     keeps all of it for emergencies. Kept on purpose: OpenVPN (the NM
+#     plugin), dnsmasq (Wi-Fi hotspot sharing), nmap/tcpdump (incident
+#     work), libfido2/tpm2-tools (security keys, TPM), arch-install-scripts,
+#     reflector, b43-fwcutter; bc + jq are marked wanted first (the kernel
+#     pipeline needs bc; jq is handy), so dependency clean-up can't take them.
+#     Best-effort: whatever is missing or still needed by something stays.
+LIVE_ONLY=(clonezilla partimage partclone fsarchiver ddrescue gpart testdisk
+           memtest86+ memtest86+-efi edk2-shell refind syslinux
+           nbd open-iscsi nfs-utils mkinitcpio-nfs-utils
+           nilfs-utils jfsutils bcachefs-tools udftools dmraid fatresize
+           mmc-utils sdparm sg3_utils lsscsi
+           wvdial modemmanager ppp pptpclient xl2tpd vpnc openconnect stoken
+           ndisc6 iwd wireless_tools darkhttpd)
+present=()
+for p in "${LIVE_ONLY[@]}"; do pacman -Q "$p" >/dev/null 2>&1 && present+=("$p"); done
+if [ ${#present[@]} -gt 0 ]; then
+  pacman -D --asexplicit bc jq >/dev/null 2>&1 || true
+  pacman -Rns --noconfirm "${present[@]}" >/dev/null 2>&1 \
+    || for p in "${present[@]}"; do pacman -Rns --noconfirm "$p" >/dev/null 2>&1 || true; done
+  # memtest's GRUB entries go with it; the bootloader module writes grub.cfg later
+fi
+
 # 6. archiso login cosmetics
 rm -f /root/.automated_script.sh /root/.zlogin /etc/motd 2>/dev/null
 
