@@ -14,6 +14,6 @@ matcher = "^(Bash|apply_patch|Edit|Write)$"
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command = "python3 -I /usr/share/veloguard/agents/agent-plugin/veloguard/hooks/guard_hook.py"
-timeout = 20
+command = "python3 -I /usr/share/veloguard/agents/agent-plugin/veloguard/hooks/guard_hook.py Codex"
+timeout = 100
 statusMessage = "VeloGuard is checking this"

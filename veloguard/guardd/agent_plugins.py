@@ -68,6 +68,7 @@ class Plugin:
     home: dict = field(default_factory=dict)
     env: list[str] = field(default_factory=list)
     ask: dict = field(default_factory=dict)
+    sandbox: dict = field(default_factory=dict)
 
     # --- where things are, for a given home ---------------------------------
     @staticmethod
@@ -114,7 +115,8 @@ def _load(path: Path) -> Plugin:
                   bin_paths=_str_list(d.get("bin_paths", []), "bin_paths"),
                   brain=brain, launch=launch, signin=d.get("signin", ""),
                   vendor=d.get("vendor", ""), home=home,
-                  env=_str_list(d.get("env", []), "env"), ask=ask)
+                  env=_str_list(d.get("env", []), "env"), ask=ask,
+                  sandbox=d.get("sandbox") if isinstance(d.get("sandbox"), dict) else {})
 
 
 def load_all() -> dict[str, Plugin]:
@@ -163,11 +165,35 @@ def session_user() -> str | None:
 
 # --- the sandbox ---------------------------------------------------------------
 
+def install_binds(p: Plugin, home: str) -> list[str]:
+    """An agent installed in the home folder (npm/bun prefix ~/.local, Claude
+    Code's ~/.local/share/claude) is invisible in the brain's empty home: show
+    its own program read-only — the package folder it runs from, and the
+    ~/.local/bin link recreated as a link (Node resolves its imports from the
+    real path). Nothing else of the home comes along."""
+    exe = p.find_bin(home)
+    if not exe or not exe.startswith(home + "/"):
+        return []
+    real = os.path.realpath(exe)
+    out: list[str] = []
+    if real.startswith(home + "/"):
+        m = re.search(r"^(.*/node_modules/(?:@[^/]+/)?[^/]+)/", real)
+        root = m.group(1) if m else real
+        out += ["--ro-bind", root, root]
+    if os.path.islink(exe):
+        out += ["--symlink", os.readlink(exe), exe]
+    elif exe != real or not real.startswith(home + "/"):
+        out += ["--ro-bind", exe, exe]
+    return out
+
+
 def sandbox_argv(p: Plugin, home: str, scratch: str) -> tuple[list[str], list[str]]:
     """bwrap options for plugin `p` in `home`; `scratch` (0700, the user's)
     receives copies of single files the agent rewrites (~/.claude.json).
     Returns (bwrap argv up to and excluding the command, notes)."""
-    a = ["bwrap", "--unshare-all", "--share-net", "--die-with-parent",
+    ns = (["--unshare-user-try", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try"]
+          if p.sandbox.get("share_pid") else ["--unshare-all", "--share-net"])
+    a = ["bwrap", *ns, "--die-with-parent",
          "--new-session",
          "--ro-bind", "/usr", "/usr",
          "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64",
@@ -180,8 +206,13 @@ def sandbox_argv(p: Plugin, home: str, scratch: str) -> tuple[list[str], list[st
          "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run/user",
          "--tmpfs", "/home", "--dir", home]
     notes: list[str] = []
+    binds = install_binds(p, home)
+    a += binds
+    covered = [binds[i + 2] for i, x in enumerate(binds) if x in ("--ro-bind", "--symlink")]
     for d in p.home.get("ro", []):
         q = p._expand(d, home)
+        if any(q == c or q.startswith(c.rstrip("/") + "/") for c in covered):
+            continue                     # already there (the agent's own program)
         if os.path.exists(q):
             a += ["--ro-bind", q, q]
     for d in p.home.get("overlay", []):
@@ -262,12 +293,33 @@ def run_brain(name: str, system: str, user: str, model: str | None = None,
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     out = _ANSI_RE.sub("", r.stdout or "").strip()
+    if p.brain.get("output") == "json" and r.returncode == 0:
+        out = _json_text(out)
     if r.returncode != 0:
         tail = _ANSI_RE.sub("", (r.stderr or r.stdout or "").strip()).splitlines()[-1:] or [""]
         raise RuntimeError(f"{p.label} failed (exit {r.returncode}): {tail[0][:300]}")
     if not out:
         raise RuntimeError(f"{p.label} returned nothing — is it signed in? ({p.signin})")
     return out
+
+
+def _json_text(out: str) -> str:
+    """A brain that answers in JSON ({"outputs": [{"text": …}]}, or {"text"} /
+    {"result"} / {"message"}): just the text."""
+    try:
+        d = json.loads(out[out.index("{"):])
+    except ValueError:
+        return out
+    if isinstance(d, dict):
+        outs = d.get("outputs")
+        if isinstance(outs, list):
+            texts = [str(o.get("text", "")) for o in outs if isinstance(o, dict) and o.get("text")]
+            if texts:
+                return "\n".join(texts).strip()
+        for k in ("text", "result", "message", "content"):
+            if isinstance(d.get(k), str):
+                return d[k].strip()
+    return ""
 
 
 def _run_as_session_user(p: Plugin, system: str, user: str, model: str | None,

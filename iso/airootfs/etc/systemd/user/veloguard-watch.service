@@ -1,0 +1,14 @@
+[Unit]
+Description=VeloGuard watch — scans downloads, freezes suspicious programs, and has your agent report on everything the guard catches
+Documentation=file:///opt/veloguard/README.md
+After=graphical-session.target
+
+[Service]
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/local/bin/veloguard watch
+Restart=on-failure
+RestartSec=10
+Nice=5
+
+[Install]
+WantedBy=default.target

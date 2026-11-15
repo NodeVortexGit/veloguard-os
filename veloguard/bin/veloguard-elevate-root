@@ -21,9 +21,11 @@ agent can't answer for itself:
     at a time, and every request — approved or not — is in the audit log;
   * defended by design (guardd/cmdguard.py, the rules the Claude Code plugin
     applies too): a command that would switch off or rewrite the guard itself
-    — its services, firewall table, files, audit log — is refused before any
-    dialog; one that malware typically runs (a script piped from the
-    internet, persistence, disk wipes) is shown with the warning in red.
+    — its services, firewall table, files, audit log — or one that malware
+    typically runs (a script piped from the internet, persistence, disk
+    wipes) is shown with the warning in red. The person decides; the guard
+    never decides for them (2026-11-15: "everything that can be restricted,
+    I should have the option to approve or deny").
 
 Residual risk (accepted with "no password"): any Wayland client may create a
 virtual keyboard/pointer, so a process watching the screen could click Approve.
@@ -37,7 +39,7 @@ running as the same user, still gets the dialog — kept in /run (gone on
 reboot), at most 4 h, revocable (`--revoke`), and every command it covers is
 audited as "approved-by-grant". It lets the agent update VeloGuard's own files
 (maintenance); it never lets it switch the guard off (services, firewall
-table, audit log): those stay refused.
+table, audit log) unasked: those always get the dialog, grant or not.
 
   veloguard-elevate-root --agent NAME --cwd DIR -- COMMAND [ARGS...]   (via pkexec)
   veloguard-elevate-root --agent NAME --grant 3h | --revoke | --grant-status
@@ -314,11 +316,10 @@ def main() -> None:
 
     verdict, why, cls = guard_verdict(cmd, cwd)
     grant = load_grant(uid)
-    if verdict == "deny" and not (grant and cls == "tamper"):
-        audit({**entry, "result": "denied", "why": f"guard: {why}"})
-        die(f"refused by the guard: this {why}. An AI agent never switches off "
-            "VeloGuard's own protection — if you really mean it, run it yourself in a terminal")
-    if grant:
+    # What the guard would refuse goes to the person, with the reason in red;
+    # a grant covers maintenance of the guard's files, never switching it off.
+    must_ask = verdict == "deny" and not (grant and cls == "tamper")
+    if grant and not must_ask:
         audit({**entry, "result": "approved-by-grant", "grant_expires": grant["expires"],
                **({"note": why} if verdict != "allow" else {})})
         lock.close()
@@ -332,7 +333,10 @@ def main() -> None:
         audit({**entry, "result": "denied", "why": "no verified desktop session"})
         die("denied: no desktop session to ask you on (approval needs your screen) — "
             "run the command yourself in a terminal")
-    answer = ask(conn, agent, cwd, shown, why if verdict == "warn" else "")
+    if verdict == "deny":
+        why = (f"{why} — it switches off part of VeloGuard's own protection" if cls == "disable"
+               else f"{why} — it changes VeloGuard's own files")
+    answer = ask(conn, agent, cwd, shown, why if verdict in ("warn", "deny") else "")
     conn.close()
     audit({**entry, "result": answer, **({"warning": why} if verdict == "warn" else {})})
     lock.close()

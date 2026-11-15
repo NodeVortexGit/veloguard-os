@@ -28,7 +28,8 @@ def available_tiers() -> list[str]:
         av.append("light")
     if shutil.which("runsc"):
         av.append("strong")
-    if shutil.which("firecracker") or shutil.which("cloud-hypervisor"):
+    from . import microvm
+    if microvm.ready()[0]:
         av.append("vm")
     return av or ["none"]
 
@@ -53,12 +54,14 @@ def build_argv(cmd: list[str], tier: str, allow_net: bool = False,
     if tier == "light":
         return _bwrap(cmd, allow_net, persist)
     if tier == "strong":
-        return ["runsc", "--network", "host" if allow_net else "none", "do", *cmd]
+        # gVisor's userspace kernel; --rootless when the person (not root) runs it
+        rootless = ["--rootless"] if os.geteuid() != 0 else []
+        return ["runsc", *rootless, "--network", "host" if allow_net else "none", "do", *cmd]
     if tier == "vm":
-        # Real launch needs a kernel + rootfs image; VeloGuardOS's own kernel can
-        # be the guest. Shown for transparency; executor dry-runs it.
-        return ["firecracker", "--no-api",
-                "--config-file", "/etc/veloguard/microvm.json", "--", *cmd]
+        # A Firecracker micro-VM (guardd/microvm.py): the file runs inside a
+        # separate kernel with no network. Shown as the equivalent CLI; the
+        # executor calls microvm.detonate() for real.
+        return ["veloguard", "detonate", *cmd[:1]]
     # "none": never hand back the bare command — a caller that ran it would be
     # executing "sandboxed" code with the guard's own privileges.
     raise ValueError(f"no isolation tier available (got {tier!r})")

@@ -2,8 +2,8 @@
 // OpenClaw runs no hooks from Claude/Agent-Plugins bundles, so the portable
 // "veloguard" plugin brings the guard's MCP tools and skill and this one the
 // check: `veloguard check-command` judges every shell command and file edit.
-//   deny  → blocked with the reason (switching off / rewriting the guard)
-//   warn  → OpenClaw asks YOU (requireApproval), never decided by the agent
+//   deny / warn → a desktop Approve/Deny pop-up (`veloguard approve`): approved
+//                 runs, denied or unanswered is blocked — the person decides
 //   error → blocked: no check, no command.
 import { spawnSync } from "node:child_process";
 
@@ -20,6 +20,29 @@ function judge(args, text) {
   const v = JSON.parse(r.stdout || "{}");
   if (!["allow", "warn", "deny"].includes(v.verdict)) throw new Error("no verdict");
   return v;
+}
+
+function describe(event) {
+  const p = event.params ?? {};
+  const t = String(event.toolName ?? "");
+  if (SHELL.has(t.toLowerCase())) return String(p.command ?? p.cmd ?? "");
+  return `${t} ${String(p.path ?? p.file_path ?? p.filePath ?? "")}`.trim();
+}
+
+function askPerson(event, v) {
+  const r = spawnSync("veloguard", ["approve", "--agent", process.env.VELOGUARD_AGENT || "OpenClaw",
+                                    "--class", v.class ?? "", "--reason", v.reason ?? "", "--", describe(event)], {
+    encoding: "utf8", timeout: 100000,
+    env: { PATH: "/usr/local/bin:/usr/bin", HOME: process.env.HOME ?? "",
+           XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? "", WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY ?? "",
+           DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS ?? "" },
+  });
+  try {
+    const a = JSON.parse(r.stdout || "{}");
+    return { approved: a.approved === true, how: a.how ?? "no answer" };
+  } catch {
+    return { approved: false, how: "couldn't ask" };
+  }
 }
 
 function worst(a, b) {
@@ -56,14 +79,11 @@ export default {
         return { block: true, blockReason: `VeloGuard couldn't check this call (${e.message}), so it doesn't run.` };
       }
       if (!v || v.verdict === "allow") return undefined;
-      if (v.verdict === "deny") {
-        return { block: true, blockReason: `VeloGuard refused this: it ${v.reason}. An AI agent never switches off the machine's own protection — tell the person what you wanted to do; they can do it themselves.` };
-      }
-      return { requireApproval: {
-        title: "VeloGuard: check this first",
-        description: `This ${event.toolName} call ${v.reason}. Allow it only if you asked for exactly this.`,
-        severity: "warning", timeoutMs: 120000, allowedDecisions: ["allow-once", "deny"],
-      } };
+      // Anything restricted goes to the person as a desktop Approve/Deny pop-up —
+      // OpenClaw's own approval may not reach them (e.g. chatting from the Kimi app).
+      const a = askPerson(event, v);
+      if (a.approved) return undefined;
+      return { block: true, blockReason: `VeloGuard asked the person and they didn't approve it (${a.how}): this ${event.toolName} call ${v.reason}. Take that as the answer — don't retry it or look for another way.` };
     });
   },
 };

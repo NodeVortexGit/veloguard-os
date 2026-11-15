@@ -24,6 +24,12 @@ zram-generator
 wireguard-tools
 bubblewrap
 tor
+# veloguard watch: ClamAV scans every download (clamscan per batch, no daemon);
+# Firecracker runs suspicious samples in a no-network micro-VM (images built by
+# install-sandbox.sh --firecracker, which needs squashfs-tools)
+clamav
+firecracker
+squashfs-tools
 # Proton VPN's official app + CLI (Arch repos): sign in once in the app and
 # `veloguard-vpn connect proton` / auto-protect connect through it. NordVPN
 # (AUR, pinned) and Surfshark (Flathub) are added by the installer's

@@ -112,9 +112,17 @@ mcp.write_text(json.dumps(d, indent=2) + "\n")
 cfg = home / "config.toml"
 text = cfg.read_text() if cfg.exists() else ""
 mark = "# veloguard-guard-hook"
-if mark not in text:
+import re
+# Found by the hook's own path, not the comment: `kimi login` rewrites this file
+# and drops comments. An existing block is updated in place (name + timeout).
+if "guard_hook.py" in text:
+    new = re.sub(r'(command = "[^"\n]*guard_hook\.py)[^"\n]*"', "\\1 'Kimi Code'\"", text)
+    new = re.sub(r'(guard_hook\.py[^\n]*\n)timeout = \d+', r"\1timeout = 100", new)
+    if new != text:
+        cfg.write_text(new)
+else:
     text += (f"\n{mark} — VeloGuard checks shell and file edits first (veloguard-agent-connect)\n"
-             f"[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"{hook}\"\ntimeout = 20\n")
+             f"[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"{hook} 'Kimi Code'\"\ntimeout = 100\n")
     cfg.write_text(text)
 PY
 }

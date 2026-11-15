@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """PreToolUse guard for Agent Plugins hosts (Claude-style hook protocol).
 
-stdin: {"tool_name": ..., "tool_input": {...}} — answers with a deny, from the
-same rules as the Claude Code plugin and veloguard-elevate (guardd/cmdguard.py):
-switching off or rewriting the guard is refused; what malware typically does is
-held back with "ask the person first" (hosts differ on whether a hook may ask,
-so this one never assumes it can). If the guard can't be asked, the call is
-refused: no check, no command.
+stdin: {"tool_name": ..., "tool_input": {...}} — judged by the same rules as
+the Claude Code plugin and veloguard-elevate (guardd/cmdguard.py). Anything the
+guard restricts — switching off or rewriting the guard, what malware typically
+does, reading credentials — is put to the PERSON as an Approve/Deny pop-up on
+their desktop (hosts differ on whether a hook may ask in their own UI, so this
+one asks on the desktop itself). Approve → the call runs; Deny or no answer →
+it doesn't. If the guard can't be asked, the call is refused: no check, no
+command.
 
 Hosts: Codex CLI (~/.codex/hooks.json), Kimi Code (config.toml [[hooks]]), and
 any Agent Plugins host that runs plugin hooks.
@@ -48,6 +50,7 @@ def main() -> None:
         from guardd import cmdguard
     except Exception as e:  # noqa: BLE001 — a broken guard must not open the door
         answer("deny", f"VeloGuard couldn't check this call ({e}), so it doesn't run.")
+    cls = ""
     if tool in PATCH:
         patch = str(ti.get("command") or ti.get("patch") or ti.get("input") or "")
         paths = [a or b for a, b in PATCH_FILE.findall(patch)] or [""]
@@ -56,23 +59,48 @@ def main() -> None:
             v, w = cmdguard.check_write(path.strip(), patch)
             if v == "deny" or (v == "warn" and verdict == "allow"):
                 verdict, why = v, w
+        what = "change " + ", ".join(p.strip() for p in paths if p.strip())
+        cls = "tamper" if verdict == "deny" else "malware"
     elif tool in SHELL:
         cmd = ti.get("command") or ti.get("cmd") or ""
         if isinstance(cmd, list):
             cmd = " ".join(map(str, cmd))
-        verdict, why = cmdguard.check(str(cmd))
+        verdict, why, cls = cmdguard.check_detail(str(cmd))
+        what = str(cmd)
     elif tool in WRITE:
         path = ti.get("file_path") or ti.get("path") or ti.get("filename") or ""
         text = ti.get("content") or ti.get("new_string") or ti.get("new_str") or ""
         verdict, why = cmdguard.check_write(str(path), str(text))
-    if verdict == "deny":
-        answer("deny", f"VeloGuard refused this: it {why}. An AI agent never switches off "
-                       "the machine's own protection — tell the person; they can do it themselves.")
-    if verdict == "warn":
-        answer("deny", f"VeloGuard held this back: it {why}. Ask the person first, in plain "
-                       "words; if they want it, they can run it themselves.")
+        what = f"write {path}"
+        cls = "tamper" if verdict == "deny" else "malware"
+    if verdict in ("deny", "warn"):
+        ok, how = ask_person(what, why, cls)
+        if ok:
+            sys.exit(0)                               # the person approved it
+        answer("deny", f"VeloGuard asked the person and they didn't approve it ({how}): it {why}. "
+                       "Take that as the answer — don't retry it or look for another way.")
     sys.exit(0)
 
 
+def ask_person(what: str, why: str, cls: str) -> tuple[bool, str]:
+    """The desktop Approve/Deny pop-up (guardd/approve.py), audited."""
+    import os
+    try:
+        from guardd import approve
+        from guardd.audit import record
+        agent = os.environ.get("VELOGUARD_AGENT") or HOST
+        ok, how = approve.ask(agent, what, why, cls, os.getcwd(), timeout=85)
+        record({"control": "agent-approval", "agent": agent, "class": cls, "reason": why,
+                "what": what[:2000], "result": "approved" if ok else "denied", "how": how})
+        return ok, how
+    except Exception as e:  # noqa: BLE001 — no pop-up, no permission
+        return False, f"couldn't ask ({e})"
+
+
+HOST = "An AI agent"
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        HOST = sys.argv[1]          # the host names itself: guard_hook.py "Kimi Code"
     main()

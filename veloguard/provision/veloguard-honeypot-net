@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# veloguard-honeypot-net up|down — the honeypot's way in through the zero-trust
+# firewall, only while veloguard-honeypot.service runs:
+#   up    opens the decoy ports (2222 ssh, 2323 telnet, 2121 ftp, 8080 http) in
+#         inet veloguard_base, and points the real service ports at them
+#         (22→2222, 23→2323, 21→2121, 80→8080) unless something real listens
+#         there (sshd enabled, a web server on :80…)
+#   down  closes them again and drops the redirects
+set -uo pipefail
+DECOYS=(2222 2323 2121 8080)
+REDIR=("22 2222" "23 2323" "21 2121" "80 8080")
+listening() { ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
+case "${1:-up}" in
+  up)
+    nft list table inet veloguard_base >/dev/null 2>&1 || exit 0     # no firewall → nothing to open
+    for p in "${DECOYS[@]}"; do nft add element inet veloguard_base open_tcp "{ $p }" 2>/dev/null || true; done
+    rules=""
+    for r in "${REDIR[@]}"; do
+      set -- $r
+      if [ "$1" = 22 ] && { systemctl -q is-enabled sshd.service 2>/dev/null || systemctl -q is-active sshd.service 2>/dev/null; }; then continue; fi
+      listening "$1" && continue
+      rules+="    tcp dport $1 redirect to :$2"$'\n'
+    done
+    nft delete table inet veloguard_honeypot 2>/dev/null || true
+    nft -f - <<NFT
+table inet veloguard_honeypot {
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+$rules  }
+}
+NFT
+    ;;
+  down)
+    nft delete table inet veloguard_honeypot 2>/dev/null || true
+    for p in "${DECOYS[@]}"; do nft delete element inet veloguard_base open_tcp "{ $p }" 2>/dev/null || true; done
+    ;;
+  *) echo "usage: veloguard-honeypot-net up|down" >&2; exit 2 ;;
+esac
+exit 0

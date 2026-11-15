@@ -95,11 +95,33 @@ def as_text(inc: dict, limit: int = 6000) -> str:
     return f"[{inc.get('iso')}] {inc.get('kind')}: {inc.get('title')}\n{body}"
 
 
+def responder_alive(uid: int) -> bool:
+    """`veloguard watch` is running in that person's session: it has the
+    current agent write a report and announces the incident itself."""
+    try:
+        p = Path(f"/run/user/{uid}/veloguard/responder.alive")
+        return time.time() - p.stat().st_mtime < 60
+    except OSError:
+        return False
+
+
 def announce(inc: dict) -> None:
     """A desktop notification with "Investigate with <agent>". Never raises:
     the incident is saved whether or not anyone is there to see it."""
     if not os.path.exists(NOTIFY):
         return
+    try:
+        if os.geteuid() == 0:
+            from .agent_plugins import session_user
+            import pwd
+            u = session_user()
+            uid = pwd.getpwnam(u).pw_uid if u else -1
+        else:
+            uid = os.getuid()
+        if uid >= 0 and responder_alive(uid):
+            return                      # the watch reports it, with the agent's verdict
+    except (KeyError, OSError):
+        pass
     argv = [NOTIFY, "--incident", inc["id"], "VeloGuard caught something", inc["title"]]
     try:
         if os.geteuid() == 0:

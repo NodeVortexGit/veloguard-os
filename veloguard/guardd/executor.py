@@ -293,7 +293,13 @@ class NftExecutor:
             # with the guard's own (root) privileges" because bwrap is missing.
             raise RuntimeError("no isolation layer installed (bubblewrap/gVisor/"
                                "Firecracker) — refusing to run unsandboxed")
-        argv = vlayer.build_argv(shlex.split(target), chosen, allow_net=allow_net)
+        cmd = shlex.split(target)
+        argv = vlayer.build_argv(cmd, chosen, allow_net=allow_net)
+        if chosen == "vm" and getattr(self, "apply", False):
+            # the micro-VM runs the file itself (no network, whatever allow_net says)
+            from . import microvm
+            res = microvm.detonate(cmd[0])
+            return microvm.as_text(res) + "\n  (tier: vm — Firecracker micro-VM, network OFF)"
         out = self._sh(argv)
         note = f"  (tier: {chosen}{' — degraded from ' + tier if degraded else ''}"
         note += ", network OFF)" if not allow_net else ", network ON)"

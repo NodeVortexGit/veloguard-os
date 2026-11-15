@@ -15,11 +15,25 @@ function guard(on: any, judge: (cmd: string, write?: string) => string) {
   on('tool.check', () => ({ decision: 'allow' }))
 }
 
-test('a command that switches the guard off is refused', async ($, on) => {
+test('switching the guard off goes to the person; without their Approve it does not run', async ($, on) => {
   guard(on, cmd => (cmd.includes('nft flush ruleset') ? 'deny' : 'allow'))
   const r = await $.tool.check({ tool: 'Bash', input: { command: 'sudo nft flush ruleset' } })
   expect(r.decision).toBe('deny')
-  expect(r.reason).toContain('VeloGuard refused this')
+  expect(r.reason).toContain('VeloGuard')
+  expect(r.reason).toContain("don't retry")
+})
+
+test('the guard is asked to put refusals to the person (Approve/Deny pop-up)', async ($, on) => {
+  let seen: readonly string[] = []
+  on('process.run', (_: unknown, e: Run) => {
+    seen = e.argv
+    return { value: { exitCode: 0, stdout: JSON.stringify({ verdict: 'allow', reason: 'approved by the person' }),
+                      stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('tool.check', () => ({ decision: 'allow' }))
+  const r = await $.tool.check({ tool: 'Bash', input: { command: 'sudo systemctl stop veloguard-firewall' } })
+  expect(r.decision).toBe('allow')
+  expect(seen.join(' ')).toContain('--ask deny')
 })
 
 test('a risky command is put to the person', async ($, on) => {

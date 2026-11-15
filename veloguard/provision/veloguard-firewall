@@ -30,6 +30,10 @@ table inet veloguard {
   }
 }
 NFT
+    fi
+    # the base table was just rebuilt: re-open the honeypot's decoys if it runs
+    if systemctl -q is-active veloguard-honeypot.service 2>/dev/null; then
+      "$(dirname "$(readlink -f "$0")")/veloguard-honeypot-net" up || true
     fi ;;
   stop)
     nft delete table inet veloguard_base 2>/dev/null || true ;;

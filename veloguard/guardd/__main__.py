@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -53,7 +54,7 @@ CONFIG_PATH = VELOGUARD_DIR / "config.json"
 CONTROL_VERBS = {"setup", "use", "model", "key", "host", "status",
                  "providers", "net", "honeypot", "analyze", "run-safe",
                  "update", "agent", "agents", "check-command", "incidents", "integrity",
-                 "audit", "mcp", "voice",
+                 "audit", "mcp", "voice", "approve", "watch", "detonate",
                  "help"}
 
 
@@ -344,6 +345,49 @@ def _active_adapter():
         return None, provider, cfg.get("model")
 
 
+def _lan_neighbours_to_keep() -> set[str]:
+    """Never block these, whatever they did: the gateway(s), the DNS servers,
+    this machine's own addresses."""
+    import subprocess as sp
+    keep: set[str] = set()
+    for fam in ("-4", "-6"):
+        try:
+            for r in json.loads(sp.run(["ip", "-j", fam, "route", "show", "default"], capture_output=True,
+                                       text=True, timeout=5).stdout or "[]"):
+                if r.get("gateway"):
+                    keep.add(r["gateway"])
+            for a in json.loads(sp.run(["ip", "-j", fam, "addr"], capture_output=True,
+                                       text=True, timeout=5).stdout or "[]"):
+                for i in a.get("addr_info", []):
+                    keep.add(i.get("local", ""))
+        except (OSError, ValueError, sp.SubprocessError):
+            pass
+    try:
+        for line in Path("/etc/resolv.conf").read_text().splitlines():
+            if line.startswith("nameserver"):
+                keep.add(line.split()[1])
+        out = sp.run(["resolvectl", "dns"], capture_output=True, text=True, timeout=5).stdout
+        keep.update(re.findall(r"(\d+\.\d+\.\d+\.\d+|[0-9a-f:]{3,})", out))
+    except (OSError, sp.SubprocessError):
+        pass
+    return keep
+
+
+def _lan_blockable(ip: str) -> bool:
+    """A honeypot visitor on the local network (where nearly all of a laptop's
+    probes come from: public Wi-Fi, a compromised device at home) may be
+    blocked even though private ranges are protected for everything else —
+    except the gateway, DNS and our own addresses, which never are."""
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if not a.is_private or a.is_loopback or a.is_link_local or a.is_multicast or a.is_unspecified:
+        return False
+    return ip not in _lan_neighbours_to_keep()
+
+
 def _auto_block(ex: NftExecutor, ip: str) -> str:
     """Protective auto-block of a confirmed attacker (the --block flag is consent)."""
     action = Action(ActionType.BLOCK_IP, {"ip": ip})
@@ -353,7 +397,7 @@ def _auto_block(ex: NftExecutor, ip: str) -> str:
         return f"not blocked: {e}"
     engine = PolicyEngine.shared(DEFAULT_POLICY_PATH)
     decision = engine.evaluate(action)          # protected ranges + rate limit
-    if decision.verdict == Verdict.DENY:
+    if decision.verdict == Verdict.DENY and not _lan_blockable(ip):
         return f"not blocked: {decision.reason}"
     try:
         out = ex.block_ip(action.params["ip"])
@@ -709,17 +753,68 @@ def _check_command(rest: list[str]) -> int:
         write = rest[i + 1] if i + 1 < len(rest) else ""
     tail = rest[rest.index("--") + 1:] if "--" in rest else []
     text = " ".join(tail) if tail else sys.stdin.read()
+    opts = rest[:rest.index("--")] if "--" in rest else rest
+
+    def opt(name: str) -> str | None:
+        return opts[opts.index(name) + 1] if name in opts and opts.index(name) + 1 < len(opts) else None
+
+    cls, what = "", text
     if "--read" in rest:
         i = rest.index("--read")
-        verdict, reason = cmdguard.check_read(rest[i + 1] if i + 1 < len(rest) else "")
+        target = rest[i + 1] if i + 1 < len(rest) else ""
+        verdict, reason = cmdguard.check_read(target)
+        cls, what = "secret", f"read {target}"
+    elif write is not None:
+        verdict, reason = cmdguard.check_write(write, text)
+        cls = "tamper" if verdict == "deny" else "malware"
+        what = f"write {write}"
     else:
-        verdict, reason = (cmdguard.check_write(write, text) if write is not None
-                           else cmdguard.check(text))
+        verdict, reason, cls = cmdguard.check_detail(text)
+    # --ask deny|all: put what the guard would stop to the person (Approve/Deny
+    # pop-up) instead of deciding alone. deny = only refusals (the host asks
+    # about warnings itself); all = refusals and warnings.
+    ask = opt("--ask")
+    asked = approved = None
+    if ask in ("deny", "all") and (verdict == "deny" or (verdict == "warn" and ask == "all")):
+        from . import approve
+        agent_name = opt("--agent") or os.environ.get("VELOGUARD_AGENT") or "An AI agent"
+        approved, how = approve.ask(agent_name, what, reason, cls, opt("--cwd"))
+        asked = True
+        record({"control": "agent-approval", "agent": agent_name, "verdict": verdict,
+                "class": cls, "reason": reason, "what": what[:2000],
+                "result": "approved" if approved else "denied", "how": how})
+        if approved:
+            verdict, reason = "allow", f"approved by the person (it {reason})"
+        else:
+            verdict, reason = "deny", f"the person didn't approve it ({how}) — it {reason}"
     if as_json:
-        print(json.dumps({"verdict": verdict, "reason": reason}))
+        out = {"verdict": verdict, "reason": reason, "class": cls if verdict != "allow" else ""}
+        if asked:
+            out.update({"asked": True, "approved": bool(approved)})
+        print(json.dumps(out))
     elif verdict != "allow":
         print(f"{verdict}: {reason}")
     return {"allow": 0, "warn": 1}.get(verdict, 3)
+
+
+def _approve(rest: list[str]) -> int:
+    """guardd approve --agent NAME [--class C] [--reason R] [--cwd DIR] -- WHAT:
+    put something the guard restricts to the person (Approve/Deny pop-up).
+    Prints {"approved": bool, "how": ...}; exit 0 approved, 1 not."""
+    from . import approve
+    opts = rest[:rest.index("--")] if "--" in rest else rest
+    what = " ".join(rest[rest.index("--") + 1:]) if "--" in rest else sys.stdin.read()
+
+    def opt(name: str) -> str:
+        return opts[opts.index(name) + 1] if name in opts and opts.index(name) + 1 < len(opts) else ""
+
+    agent_name = opt("--agent") or os.environ.get("VELOGUARD_AGENT") or "An AI agent"
+    ok, how = approve.ask(agent_name, what, opt("--reason"), opt("--class"), opt("--cwd") or None)
+    record({"control": "agent-approval", "agent": agent_name, "class": opt("--class"),
+            "reason": opt("--reason"), "what": what[:2000],
+            "result": "approved" if ok else "denied", "how": how})
+    print(json.dumps({"approved": ok, "how": how}))
+    return 0 if ok else 1
 
 
 def _agents(rest: list[str]) -> int:
@@ -824,6 +919,26 @@ def _control(argv: list[str]) -> int:
 
     if verb == "check-command":
         return _check_command(rest)
+
+    if verb == "approve":
+        return _approve(rest)
+
+    if verb == "watch":
+        from . import watch
+        return watch.status() if rest[:1] == ["status"] else watch.Watch().run()
+
+    if verb == "detonate":
+        from . import microvm
+        p = argparse.ArgumentParser(prog="guardd detonate")
+        p.add_argument("file")
+        p.add_argument("--seconds", type=int, default=30)
+        a = p.parse_args(rest)
+        print(f"detonating {a.file} in a Firecracker micro-VM (no network, {a.seconds} s)…", flush=True)
+        res = microvm.detonate(a.file, a.seconds)
+        print(microvm.as_text(res))
+        record({"control": "detonate", "file": a.file, "result": "ok" if res.get("ok") else "failed",
+                "exit": res.get("exit"), "error": res.get("error")})
+        return 0 if res.get("ok") else 1
 
     if verb == "incidents":
         return _incidents(rest)
