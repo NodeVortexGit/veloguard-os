@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#
+# veloguard-hypr — the few Hyprland dispatches VeloGuardOS scripts send, in a
+# form every Hyprland accepts. Since 0.57 `hyprctl dispatch` evaluates Lua
+# (`hyprctl dispatch 'hl.dsp.exit()'`); the old `hyprctl dispatch exit` /
+# `dpms off` is a Lua syntax error there, so the power menu's "Log out" and
+# hypridle's screen-off silently did nothing. Lua first, then the legacy form
+# for releases before the Lua config.
+#
+#   veloguard-hypr dpms on|off|toggle
+#   veloguard-hypr exit
+set -u
+case "${1:-}" in
+  dpms)
+    case "${2:-}" in on|off|toggle) ;; *) echo "usage: veloguard-hypr dpms on|off|toggle" >&2; exit 2 ;; esac
+    lua="hl.dsp.dpms({ action = \"$2\" })"; legacy=(dpms "$2") ;;
+  exit)
+    lua="hl.dsp.exit()"; legacy=(exit) ;;
+  *)
+    echo "usage: veloguard-hypr dpms on|off|toggle | exit" >&2; exit 2 ;;
+esac
+out="$(hyprctl dispatch "$lua" 2>&1)"
+[ "${out%%$'\n'*}" = ok ] && exit 0
+hyprctl dispatch "${legacy[@]}"

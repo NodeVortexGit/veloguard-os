@@ -1,38 +1,84 @@
 #!/usr/bin/env bash
 #
-# veloguard-agent — launch VeloGuard's guarded autonomous agent, Omarchy-style
-# (a default brain, launched in a terminal). The agent drives the machine ONLY
-# through the guard (policy → consent → audit); it is `guardd agent` under the
-# hood, so a weak/remote brain can be wrong but never unaccountable.
+# veloguard-agent — VeloGuard's AI agent, Omarchy-style: pick a default brain
+# once, and it stands in everywhere the guard reasons (intents, attack
+# analysis, voice) and opens with Super+Shift+A.
 #
-# Backends (the "coding agent" of Omarchy's agent plugin, for VeloGuard):
-#   claude — Anthropic API (needs a key: `guardd key claude <KEY>`)
-#   ollama — a LOCAL model via Ollama (private, free; `ollama serve` + a pulled model)
+# Brains:
+#   claude       Anthropic API, in the guard (needs a key: guardd key claude <KEY>)
+#   ollama       a LOCAL model via Ollama (private, free)
+#   claude-code  codex  kimi  hermes  openclaw
+#                coding agents, via their agent plugins
+#                (/usr/share/veloguard/agents/plugins). As the brain each one
+#                answers one-shot with tools off where its CLI allows, always in a
+#                throwaway sandbox; opened, it's the agent's own app with the
+#                guard's MCP tools attached — and `sudo` asks you to Approve/Deny.
 #
-#   veloguard-agent                     # interactive agent console (default brain)
-#   veloguard-agent "lock down: block 203.0.113.10 and raise the VPN"
-#   veloguard-agent set claude|ollama   # choose + persist the default brain
-#   veloguard-agent mcp                 # print the MCP config for external agents
-#   veloguard-agent setup               # run the guard's AI-plane wizard
+#   veloguard-agent                       # open your default agent
+#   veloguard-agent "block 203.0.113.10 and raise the VPN"   # one goal, through the guard
+#   veloguard-agent set <brain>           # choose + persist the default brain
+#   veloguard-agent pick                  # choose it from a menu
+#   veloguard-agent list                  # every brain: installed? signed in?
+#   veloguard-agent test [brain]          # one tiny question to the brain
+#   veloguard-agent install <agent>...    # install an agent now (Approve to proceed)
+#   veloguard-agent ask [--to AGENT] [--clipboard|--errors|--incident [ID]] [TEXT]
+#                                         # hand an error (or an incident) to the agent
+#                                         #   you pick — Super+Shift+E, or "Ask an AI
+#                                         #   agent" on a VeloGuard notification
+#   veloguard-agent connect [agent]...    # (re)install VeloGuard's plugin into agents
+#   veloguard-agent mcp                   # the MCP config for any other agent
+#   veloguard-agent setup                 # the guard's AI-plane wizard
 set -euo pipefail
 
 DEFAULT_FILE="${VELOGUARD_AGENT_FILE:-$HOME/.config/veloguard/agent}"
 AUTONOMY="${VELOGUARD_AGENT_AUTONOMY:-guarded}"
 MCP_TEMPLATE="${VELOGUARD_MCP_TEMPLATE:-/usr/share/veloguard/agents/veloguard-mcp.json}"
+GUARD_HOME="${VELOGUARD_HOME:-/opt/veloguard}"
+SHIM_DIR="${VELOGUARD_AGENT_SHIM:-/usr/share/veloguard/agents/bin}"   # sudo → Approve/Deny
+INSTALLER="$GUARD_HOME/provision/install-agents.sh"
+BUILTIN=(claude ollama)
 
 vg() { command veloguard "$@"; }                 # the guard CLI (on PATH)
+note() { command -v notify-send >/dev/null 2>&1 && notify-send "VeloGuard agent" "$1" || echo "$1" >&2; }
 
-get_default() { [ -f "$DEFAULT_FILE" ] && cat "$DEFAULT_FILE" || true; }
+# Agent plugins as TSV: name label installed(1/0) signed-in(1/0) bin signin
+plugins_tsv() {
+  ( cd "$GUARD_HOME" && python3 -I -c '
+import sys; sys.path.insert(0, ".")
+from guardd import agent_plugins as a
+for p in a.load_all().values():
+    s = a.status(p)
+    print("\t".join([p.name, p.label, "1" if s["installed"] else "0",
+                     "1" if s["config"] else "0", s["bin"] or "", p.signin]))
+' 2>/dev/null ) || true
+}
+plugin_names() { plugins_tsv | cut -f1; }
+is_plugin() { plugin_names | grep -qxF -- "$1"; }
+valid_brain() { case " ${BUILTIN[*]} " in *" $1 "*) return 0 ;; esac; is_plugin "$1"; }
+field() { plugins_tsv | awk -F'\t' -v n="$1" -v f="$2" '$1 == n { print $f }'; }
+
+# The agent's own app: its launch argv (NUL-separated), binary resolved.
+launch_argv() {
+  ( cd "$GUARD_HOME" && python3 -I -c '
+import os, sys; sys.path.insert(0, ".")
+from guardd import agent_plugins as a
+p = a.get(sys.argv[1]); exe = p and p.find_bin(os.path.expanduser("~"))
+argv = p.launch.get("argv") or [p.bin] if p else []
+if not (p and exe and argv): sys.exit(1)
+sys.stdout.write("\0".join([exe, *argv[1:]]) + "\0")
+' "$1" )
+}
+
+get_default() { [ -f "$DEFAULT_FILE" ] && head -n1 "$DEFAULT_FILE" || true; }
 set_default() {
   mkdir -p "$(dirname "$DEFAULT_FILE")"
   printf '%s\n' "$1" > "$DEFAULT_FILE"
-  vg use "$1" >/dev/null 2>&1 || true            # make it the guard's active brain
+  vg use "$1" >/dev/null 2>&1 || true            # the guard's active brain too
 }
 
 print_mcp() {
-  echo "Attach any MCP-capable coding agent (Claude Code, Codex, opencode, …) to"
-  echo "the guard so it drives the machine THROUGH the guard. Add this to the"
-  echo "agent's MCP config (e.g. ./.mcp.json):"
+  echo "Attach any MCP-capable coding agent to the guard so it drives the machine"
+  echo "THROUGH the guard. Add this to the agent's MCP config (e.g. ./.mcp.json):"
   echo
   if [ -r "$MCP_TEMPLATE" ]; then cat "$MCP_TEMPLATE"; else cat <<'JSON'
 { "mcpServers": { "veloguard": { "command": "veloguard-mcp",
@@ -41,45 +87,164 @@ JSON
   fi
 }
 
+term_exec() {   # open a terminal running "$@" (or run it here, without a desktop)
+  local t
+  t="$(command -v alacritty || command -v foot || command -v kitty || command -v xterm || true)"
+  if [ -z "$t" ] || [ -z "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then exec "$@"; fi
+  # Fixed app-id so window rules/themes can single out the agent window.
+  case "${t##*/}" in
+    alacritty|kitty) exec "$t" --class org.veloguard.agent -e "$@" ;;
+    foot)            exec "$t" --app-id org.veloguard.agent "$@" ;;
+    *)               exec "$t" -e "$@" ;;
+  esac
+}
+
+install_agents() {
+  [ $# -gt 0 ] || { echo "usage: veloguard-agent install <agent>... (have: $(plugin_names | tr '\n' ' '))" >&2; exit 2; }
+  local a; for a in "$@"; do is_plugin "$a" || { echo "no agent plugin '$a'" >&2; exit 2; }; done
+  if [ -t 1 ]; then
+    exec veloguard-elevate --agent "VeloGuard agent installer" -- "$INSTALLER" --user "$(id -un)" "$@"
+  fi
+  term_exec bash -c 'veloguard-elevate --agent "VeloGuard agent installer" -- "$0" --user "$(id -un)" "$@";
+                     echo; read -rp "Press Enter to close…" _' "$INSTALLER" "$@"
+}
+
+recent_errors() {
+  { echo "## journalctl -b -p err (last 40)"; journalctl -b -p err -n 40 --no-pager -o short 2>/dev/null
+    echo; echo "## failed units"; systemctl --failed --no-legend 2>/dev/null; systemctl --user --failed --no-legend 2>/dev/null
+  } | tail -c 6000
+}
+
+installed_agents() { plugins_tsv | awk -F'\t' '$3 == "1" { print $1 "\t" $2 }'; }
+
+pick_agent() {   # an installed agent: the default first; wofi on a desktop
+  local def rows choice
+  def="$(get_default)"
+  rows="$(installed_agents | awk -F'\t' -v d="$def" '{ print ($1 == d ? "0" : "1") "\t" $1 "\t" $2 }' | sort | cut -f2-)"
+  [ -n "$rows" ] || { note "No AI agent is installed — veloguard-agent install codex"; return 1; }
+  if command -v wofi >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ] && [ "$(printf '%s\n' "$rows" | wc -l)" -gt 1 ]; then
+    choice="$(printf '%s\n' "$rows" | awk -F'\t' '{ printf "%-12s %s\n", $1, $2 }' | wofi --dmenu --width 420 --height 300 -p 'Send it to which agent?')" || return 1
+    printf '%s\n' "${choice%% *}"
+  else
+    printf '%s\n' "$rows" | head -1 | cut -f1
+  fi
+}
+
+ask_agent() {
+  local to="" kind=error src="" text="" json label clip
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to)        to="${2:-}"; shift 2 ;;
+      --clipboard) src=clipboard; shift ;;
+      --errors)    src=errors; shift ;;
+      --incident)  kind=incident; src="incident:${2:-latest}"; [ $# -ge 2 ] && [[ $2 != --* ]] && shift; shift ;;
+      --text)      text="${2:-}"; shift 2 ;;
+      --)          shift; text="$*"; break ;;
+      *)           text="$*"; break ;;
+    esac
+  done
+  [ -n "$text" ] || [ -n "$src" ] || [ -t 0 ] || text="$(cat)"
+  if [ -z "$text" ] && [ -z "$src" ] && command -v wofi >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    case "$(printf '%s\n' "Text I copied (clipboard)" "Recent system errors" "Latest security incident" \
+            | wofi --dmenu --width 420 --height 220 -p 'Ask an AI agent about…')" in
+      "Text I copied"*)   src=clipboard ;;
+      "Recent system"*)   src=errors ;;
+      "Latest security"*) kind=incident; src=incident:latest ;;
+      *) return 0 ;;
+    esac
+  fi
+  case "$src" in
+    clipboard)  text="$(wl-paste -n 2>/dev/null || true)" ;;
+    errors)     text="$(recent_errors)" ;;
+    incident:*) text="$(vg incidents --show "${src#incident:}" 2>/dev/null || true)"
+                [ -n "$text" ] || { note "No incident to investigate — the guard hasn't caught anything"; return 1; } ;;
+  esac
+  [ "$to" = default ] && { is_plugin "$(get_default)" && to="$(get_default)" || to=""; }
+  [ -n "$to" ] || to="$(pick_agent)" || return 0
+  is_plugin "$to" || { echo "no agent '$to' (have: $(plugin_names | tr '\n' ' '))" >&2; return 2; }
+  json="$(printf '%s' "$text" | vg agents handoff "$to" "$kind")" || { note "Couldn't open $to"; return 1; }
+  label="$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["label"])')"
+  clip="$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["clipboard"] or "", end="")')"
+  mapfile -d '' -t argv < <(printf '%s' "$json" | python3 -c 'import json,sys; sys.stdout.write("\0".join(json.load(sys.stdin)["argv"]) + "\0")')
+  if [ -n "$clip" ]; then
+    printf '%s' "$clip" | wl-copy 2>/dev/null && note "$label opens next — paste the request with Ctrl+Shift+V"
+  fi
+  cd "$HOME"
+  term_exec env "PATH=$SHIM_DIR:$HOME/.local/bin:$PATH" "VELOGUARD_AGENT=$label" \
+    "VELOGUARD_AGENT_AUTONOMY=$AUTONOMY" "${argv[@]}"
+}
+
+pick() {
+  local rows choice name
+  rows="$( { printf 'claude\tClaude API (in the guard)\n'; printf 'ollama\tOllama — local model\n'
+             plugins_tsv | awk -F'\t' '{ printf "%s\t%s%s\n", $1, $2, ($3 == "1" ? "" : " — not installed") }'; } )"
+  choice="$(printf '%s\n' "$rows" | awk -F'\t' '{ printf "%-12s %s\n", $1, $2 }' \
+            | wofi --dmenu --width 460 --height 340 -p 'VeloGuard agent brain')" || return 1
+  name="${choice%% *}"
+  valid_brain "$name" || return 1
+  set_default "$name"; note "Default agent → $name"
+  if is_plugin "$name" && [ "$(field "$name" 3)" != 1 ]; then
+    # Its own terminal, detached: pick's caller keeps going (and its output
+    # is the chosen name, captured by the caller).
+    note "$(field "$name" 2) isn't installed yet — installing it (Approve to proceed)"
+    setsid -f "$0" install "$name" </dev/null >/dev/null 2>&1 || true
+  fi
+  printf '%s\n' "$name"
+}
+
 case "${1:-}" in
   set)
-    case "${2:-}" in
-      claude|ollama) set_default "$2"; echo "default agent brain → $2" ;;
-      *) echo "usage: veloguard-agent set <claude|ollama>" >&2; exit 2 ;;
-    esac
+    valid_brain "${2:-}" || { echo "usage: veloguard-agent set <$(printf '%s|' "${BUILTIN[@]}" $(plugin_names) | sed 's/|$//')>" >&2; exit 2; }
+    set_default "$2"; echo "default agent brain → $2"
+    if is_plugin "$2" && [ "$(field "$2" 3)" != 1 ]; then echo "  not installed yet: veloguard-agent install $2"; fi
     exit 0 ;;
+  pick)   pick >/dev/null; exit 0 ;;
+  list)   vg agents list; echo; echo "  built in: claude (API key)  ollama (local)"; exit 0 ;;
+  test)   b="${2:-$(get_default)}"
+          if is_plugin "$b"; then exec vg agents test "$b"; fi
+          echo "test is for agent plugins (have: $(plugin_names | tr '\n' ' '))" >&2; exit 2 ;;
+  install) shift; install_agents "$@" ;;
+  ask)    shift; ask_agent "$@"; exit $? ;;
+  connect) shift; exec veloguard-agent-connect "$@" ;;
   mcp)    print_mcp; exit 0 ;;
   setup)  exec vg setup ;;
-  -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
-# Resolve the brain: stored default, else pick one (wofi in a graphical session).
+# Resolve the brain: the stored default, else pick one (wofi in a desktop).
 brain="$(get_default)"
 if [ -z "$brain" ]; then
   if command -v wofi >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    brain="$(printf 'claude\nollama\n' | wofi --dmenu -p 'VeloGuard agent brain')" || exit 0
-    [ -n "$brain" ] && set_default "$brain" || exit 0
+    brain="$(pick)" || exit 0
   else
-    echo "no default agent brain — run: veloguard-agent set claude|ollama" >&2
+    echo "no default agent brain — run: veloguard-agent set <brain>  (veloguard-agent list)" >&2
     exit 1
   fi
 fi
+# The brain name ends up in commands below — only accept real values,
+# whatever the file contains.
+valid_brain "$brain" || { echo "unknown agent brain '$brain' — run: veloguard-agent set <brain>" >&2; exit 2; }
 vg use "$brain" >/dev/null 2>&1 || true
 
 goal="${*:-}"
 if [ -n "$goal" ]; then
-  run_cmd="veloguard agent --autonomy $(printf %q "$AUTONOMY") $(printf %q "$goal")"
-else
-  # No goal → an interactive agent console (guardd agent is one-shot per goal).
-  run_cmd="echo '🛡 VeloGuard agent ('"$brain"', autonomy=$AUTONOMY) — type a goal, blank line to quit.'; \
-while true; do read -rp 'guard-agent> ' g || break; [ -z \"\$g\" ] && break; \
-veloguard agent --autonomy $(printf %q "$AUTONOMY") \"\$g\"; echo; done"
+  exec veloguard agent --autonomy "$AUTONOMY" "$goal"     # through the guard, any brain
 fi
 
-TERM_BIN="$(command -v alacritty || command -v foot || command -v xterm || true)"
-if [ -n "$TERM_BIN" ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-  # Fixed app-id so window rules/themes can single out the agent window.
-  exec "$TERM_BIN" --class org.veloguard.agent -e bash -lc "$run_cmd"
-else
-  exec bash -lc "$run_cmd"
+if is_plugin "$brain"; then
+  # The agent's own app, attached to the guard: its MCP tools drive the
+  # machine through policy/consent/audit, and its `sudo` asks you first.
+  mapfile -d '' -t argv < <(launch_argv "$brain") || true
+  if [ ${#argv[@]} -eq 0 ]; then
+    note "$(field "$brain" 2) isn't installed — veloguard-agent install $brain"
+    exit 1
+  fi
+  cd "$HOME"
+  term_exec env "PATH=$SHIM_DIR:$HOME/.local/bin:$PATH" "VELOGUARD_AGENT=$(field "$brain" 2)" \
+    "VELOGUARD_AGENT_AUTONOMY=$AUTONOMY" "${argv[@]}"
 fi
+
+# claude / ollama: the guard's own agent console (guardd agent is one-shot per goal).
+term_exec bash -c 'echo "🛡 VeloGuard agent ($0, autonomy=$1) — type a goal, blank line to quit."
+  while true; do read -rp "guard-agent> " g || break; [ -z "$g" ] && break
+    veloguard agent --autonomy "$1" "$g"; echo; done' "$brain" "$AUTONOMY"

@@ -1,0 +1,13 @@
+# VeloGuardOS: after any upgrade, check that the packages pacman doesn't
+# update itself (the Hyprland fork, Albert, NordVPN) still load their libraries.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = VeloGuard: checking self-built packages still load their libraries...
+When = PostTransaction
+Exec = /opt/veloguard/provision/veloguard-localpkg-check

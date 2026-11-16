@@ -1,0 +1,12 @@
+[Unit]
+Description=VeloGuardOS: check the guard's own files against the deployed baseline
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/veloguard integrity check
+Nice=10
+IOSchedulingClass=idle
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes

@@ -35,9 +35,21 @@ install_arch() {                                  # the "lightweight" reference
   else
     warn "desktop/packages.desktop not found — installing a minimal Hyprland set"
     pkgs+=(hyprland waybar mako wofi swaybg swayosd sddm uwsm \
-           xdg-desktop-portal-hyprland alacritty thunar polkit-gnome)
+           xdg-desktop-portal-hyprland alacritty polkit-gnome)
   fi
-  pacman -Syu --noconfirm --needed "${pkgs[@]}"
+  # hyprland-multicursor (our compositor) is not in Arch's repos: take it from
+  # the local copy when there is one, else fall back to stock hyprland.
+  local want=() p f
+  for p in "${pkgs[@]}"; do
+    if [ "$p" = hyprland-multicursor ]; then
+      pacman -T hyprland >/dev/null 2>&1 && continue
+      f="$(ls /usr/share/veloguard/repo/hyprland-multicursor-[0-9]*.pkg.tar.zst 2>/dev/null | tail -n1)"
+      if [ -n "$f" ]; then pacman -Sy >/dev/null 2>&1; pacman -U --noconfirm --needed "$f"; continue; fi
+      p=hyprland
+    fi
+    want+=("$p")
+  done
+  pacman -Syu --noconfirm --needed "${want[@]}"
 }
 
 # --- deploy the VeloGuard desktop config layer -----------------------------

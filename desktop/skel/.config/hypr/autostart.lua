@@ -1,0 +1,5 @@
+-- VeloGuardOS — your extra autostart processes (edit freely).
+-- Runs once when the session starts (not on config reloads). Example:
+-- hl.on("hyprland.start", function()
+--   hl.exec_cmd("my-service")
+-- end)

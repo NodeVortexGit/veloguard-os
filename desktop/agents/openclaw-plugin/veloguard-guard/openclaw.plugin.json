@@ -1,0 +1,8 @@
+{
+  "id": "veloguard-guard",
+  "name": "VeloGuard guard",
+  "description": "VeloGuardOS: before exec, apply_patch, write and edit run, the guard checks them — switching off or rewriting the guard is blocked, what malware typically does asks you first. Same rules as every agent on VeloGuardOS (guardd/cmdguard.py).",
+  "version": "0.1.0",
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

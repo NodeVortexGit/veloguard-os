@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+#
+# veloguard-agent-connect — install VeloGuard's plugin into your AI agents, so
+# each one has the guard's MCP tools, its rules, and a guard check before its
+# shell and file-edit tools — wherever you open it from, not only through
+# veloguard-agent. Run as you (not root); safe to run again (it refreshes).
+#
+#   veloguard-agent-connect [AGENT...]     # default: every installed agent
+#   veloguard-agent connect codex          # same, through the launcher
+#
+#   claude-code  /plugin: the "veloguard" plugin from the OS's own marketplace
+#                (/usr/share/veloguard/agents/claude-plugin, read in place).
+#   codex        the portable Agent Plugin via a local marketplace + plugin add.
+#   hermes       the portable Agent Plugin (MCP tools + skill) and a native
+#                Hermes plugin with the check (pre_tool_call), both enabled.
+#   openclaw     the portable Agent Plugin (MCP tools + skill) and a native one
+#                with the check (before_tool_call: blocks, or asks you).
+#   codex        (the check comes from the OS's managed policy,
+#                /etc/codex/requirements.toml, when it's there)
+#   kimi         Kimi Code installs plugins from its own UI only, so the same
+#                parts go into its config: mcp.json, the skill, a PreToolUse hook.
+set -uo pipefail
+SHARE="${VELOGUARD_AGENTS_SHARE:-/usr/share/veloguard/agents}"
+STAGE="${XDG_DATA_HOME:-$HOME/.local/share}/veloguard/agent-plugin"   # symlinks resolved
+HOOK="python3 -I $STAGE/veloguard/hooks/guard_hook.py"
+export PATH="$HOME/.local/bin:$PATH"
+say()  { printf '\033[1;36m[veloguard]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[veloguard]\033[0m %s\n' "$*" >&2; }
+[ "$(id -u)" -ne 0 ] || { warn "run as your own user, not root"; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+stage() {   # a self-contained copy of the portable plugin (agents copy it in; links would dangle)
+  rm -rf "$STAGE"; mkdir -p "$(dirname "$STAGE")"
+  cp -rL "$SHARE/agent-plugin" "$STAGE"
+}
+
+connect_claude-code() {
+  have claude || return 2
+  claude plugin marketplace add "$SHARE/claude-plugin" >/dev/null 2>&1 \
+    || claude plugin marketplace update veloguard >/dev/null 2>&1 || true
+  claude plugin install veloguard@veloguard --scope user >/dev/null 2>&1 || true
+  claude plugin list 2>/dev/null | grep -q 'veloguard@veloguard'
+}
+
+connect_codex() {
+  # The plugin brings the MCP tools and skill; Codex CLI runs plugin hooks only
+  # in its desktop app, so the check goes into ~/.codex/hooks.json too (Codex
+  # asks you once to trust it: /hooks).
+  have codex || return 2
+  codex plugin marketplace add "$STAGE" >/dev/null 2>&1 || codex plugin marketplace upgrade veloguard >/dev/null 2>&1 || true
+  codex plugin add veloguard@veloguard </dev/null >/dev/null 2>&1 || true
+  # The OS's managed policy (/etc/codex/requirements.toml) carries the check:
+  # trusted by policy, can't be switched off from inside Codex. Only without
+  # it does the check go into the user's own hooks.json.
+  local managed=0; grep -qs veloguard /etc/codex/requirements.toml && managed=1
+  python3 -I - "${CODEX_HOME:-$HOME/.codex}/hooks.json" "$HOOK" "$managed" <<'PY'
+import json, pathlib, sys
+f, hook, managed = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3] == "1"
+d = json.loads(f.read_text()) if f.exists() else {}
+pre = d.setdefault("hooks", {}).setdefault("PreToolUse", [])
+pre[:] = [h for h in pre if "veloguard" not in json.dumps(h)]
+if not managed:
+    pre.append({"matcher": "Bash|apply_patch|Edit|Write",
+                "hooks": [{"type": "command", "command": hook, "timeout": 20,
+                           "statusMessage": "VeloGuard is checking this"}]})
+f.parent.mkdir(parents=True, exist_ok=True)
+f.write_text(json.dumps(d, indent=2) + "\n")
+PY
+  codex plugin list 2>/dev/null | grep -qi 'veloguard'
+}
+
+connect_hermes() {
+  # Local plugins are folders in ~/.hermes/plugins (install takes catalog/git
+  # sources only). Two: the portable one (MCP tools + skill) and a native one
+  # for the check — Hermes runs no hooks from portable plugins.
+  have hermes || return 2
+  local d="${HERMES_HOME:-$HOME/.hermes}/plugins" p
+  mkdir -p "$d"
+  rm -rf "$d/veloguard" "$d/veloguard-guard"
+  cp -r "$STAGE/veloguard" "$d/veloguard"
+  cp -rL "$SHARE/hermes-plugin/veloguard-guard" "$d/veloguard-guard"
+  for p in veloguard veloguard-guard; do hermes plugins enable "$p" </dev/null >/dev/null 2>&1 || return 1; done
+  hermes mcp list 2>/dev/null | grep -q veloguard \
+    || echo Y | hermes mcp add veloguard --command veloguard-mcp >/dev/null 2>&1 || true
+  hermes plugins list 2>/dev/null | grep -E 'veloguard-guard' | grep -q enabled
+}
+
+connect_openclaw() {
+  have openclaw || return 2
+  # --accept-capabilities: consent to what VeloGuard's own plugins declare
+  # (an MCP server; a before_tool_call hook), the step OpenClaw otherwise stops at.
+  # Two: the portable one (MCP tools + skill — OpenClaw runs no bundle hooks)
+  # and a native one with the check (blocks, or asks you).
+  openclaw plugins install "$STAGE/veloguard" --force --accept-capabilities </dev/null >/dev/null 2>&1 || true
+  openclaw plugins install "$SHARE/openclaw-plugin/veloguard-guard" --force --accept-capabilities </dev/null >/dev/null 2>&1 || true
+  openclaw plugins list 2>/dev/null | grep -qi 'veloguard-guard'
+}
+
+connect_kimi() {
+  have kimi || return 2
+  local home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+  mkdir -p "$home/skills"
+  rm -rf "$home/skills/veloguard-guard"; cp -rL "$STAGE/veloguard/skills/veloguard-guard" "$home/skills/"
+  python3 -I - "$home" "$HOOK" <<'PY'
+import json, pathlib, sys
+home, hook = pathlib.Path(sys.argv[1]), sys.argv[2]
+mcp = home / "mcp.json"
+d = json.loads(mcp.read_text()) if mcp.exists() else {}
+d.setdefault("mcpServers", {})["veloguard"] = {
+    "command": "veloguard-mcp", "env": {"VELOGUARD_AGENT_AUTONOMY": "guarded"}}
+mcp.write_text(json.dumps(d, indent=2) + "\n")
+cfg = home / "config.toml"
+text = cfg.read_text() if cfg.exists() else ""
+mark = "# veloguard-guard-hook"
+import re
+# Found by the hook's own path, not the comment: `kimi login` rewrites this file
+# and drops comments. An existing block is updated in place (name + timeout).
+if "guard_hook.py" in text:
+    new = re.sub(r'(command = "[^"\n]*guard_hook\.py)[^"\n]*"', "\\1 'Kimi Code'\"", text)
+    new = re.sub(r'(guard_hook\.py[^\n]*\n)timeout = \d+', r"\1timeout = 100", new)
+    if new != text:
+        cfg.write_text(new)
+else:
+    text += (f"\n{mark} — VeloGuard checks shell and file edits first (veloguard-agent-connect)\n"
+             f"[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"{hook} 'Kimi Code'\"\ntimeout = 100\n")
+    cfg.write_text(text)
+PY
+}
+
+want=("$@"); [ ${#want[@]} -gt 0 ] || want=(claude-code codex hermes openclaw kimi)
+stage
+rc=0
+for a in "${want[@]}"; do
+  case "$a" in claude-code|codex|hermes|openclaw|kimi) ;; *) warn "unknown agent '$a'"; rc=1; continue ;; esac
+  "connect_$a"; r=$?
+  case "$r" in
+    0) say "$a: VeloGuard plugin connected" ;;
+    2) say "$a: not installed — skipped" ;;
+    *) warn "$a: couldn't connect the VeloGuard plugin (try: veloguard-agent connect $a)"; rc=1 ;;
+  esac
+done
+exit "$rc"

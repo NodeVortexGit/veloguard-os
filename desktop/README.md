@@ -25,12 +25,32 @@ Derived from Omarchy (MIT, © David Heinemeier Hansson / 37signals). See
 ## Keybindings — stock Hyprland defaults
 
 By request, VeloGuardOS uses the **default Hyprland keybindings** (not Omarchy's):
-`defaults/hypr/bindings/hyprland-default.conf` (SUPER+Q terminal, SUPER+C close,
+`defaults/hypr/bindings/hyprland-default.lua` (SUPER+Q terminal, SUPER+C close,
 SUPER+E files, SUPER+R launcher, SUPER+V float, SUPER 1-0 workspaces, …). Only
 the app variables point at VeloGuard's shipped apps. Omarchy's **look & feel**
 (gaps/blur/animations, Waybar, mako, theming) is kept. VeloGuard's own additions
-live in `veloguard.conf`, all under SUPER+SHIFT / SUPER+CTRL so they never
+live in `veloguard.lua`, all under SUPER+SHIFT / SUPER+CTRL so they never
 clobber a default.
+
+## Hyprland config is Lua
+
+Hyprland 0.57 removed `hyprland.conf`: it reads only `~/.config/hypr/hyprland.lua`
+(Lua configs work since 0.55). VeloGuard's Hyprland config is Lua:
+
+- `defaults/hypr/init.lua` loads the shipped defaults (`envs`, `autostart`,
+  `looknfeel`, `windows`, `bindings/*`, the NVIDIA env when present, the active
+  theme's `hyprland.lua`); `skel/.config/hypr/hyprland.lua` loads that, then the
+  user's own `monitors/input/bindings/looknfeel/autostart.lua`, which win.
+- The `*.conf` twins stay for accounts that still `source` them;
+  `defaults/hypr/legacy-skel/` keeps the old per-user `.conf` files so
+  `veloguard-hypr-migrate` can tell a user's own changes from VeloGuard's.
+- `veloguard-hypr-migrate` moves `.conf` accounts to Lua, converting the usual
+  personal settings (monitors, input/keyboard layout, `bind`/`unbind` with
+  `exec`, `exec-once`, simple looks) and listing what it couldn't in
+  `~/.config/hypr/MIGRATED-FROM-CONF.txt`. A pacman hook runs it whenever
+  Hyprland is installed or upgraded.
+- `hyprctl dispatch` takes Lua since 0.57 (`hl.dsp.exit()`), so scripts go
+  through `veloguard-hypr dpms on|off|toggle` / `veloguard-hypr exit`.
 
 ## Hardware / drivers (Omarchy-derived)
 

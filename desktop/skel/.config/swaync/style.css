@@ -1,0 +1,64 @@
+/* VeloGuardOS quick panel + notifications (swaync) — Frost: translucent
+   glass with real blur behind (Hyprland layer rules "swaync-*"); colours from
+   the active theme (~/.config/veloguard/current/swaync.css). */
+@import url("../veloguard/current/swaync.css");
+
+* { font-family: "JetBrainsMono Nerd Font", "Noto Sans CJK JP", sans-serif; font-size: 13px; }
+
+.control-center {
+  background: @glass;
+  border-left: 1px solid alpha(@accent, 0.6);
+  border-bottom: 1px solid alpha(@accent, 0.6);
+  border-radius: 0;
+  padding: 10px;
+  color: @fg;
+}
+.control-center .notification-row .notification-background,
+.notification-row .notification-background {
+  background: transparent;
+}
+.notification-row .notification-background .notification,
+.control-center .notification-row .notification-background .notification {
+  background: @glass-strong;
+  border: 1px solid alpha(@accent, 0.45);
+  border-radius: 0;
+  color: @fg;
+  padding: 6px;
+}
+.notification .summary { font-weight: bold; color: #ffffff; }
+.notification .body, .notification .time { color: @fg; }
+.notification-default-action:hover, .notification-action:hover { background: alpha(@accent, 0.35); }
+.notification-action { background: alpha(@accent, 0.2); border: 1px solid alpha(@accent, 0.45); border-radius: 0; color: @fg; }
+.close-button { background: alpha(@accent, 0.5); border-radius: 0; color: #fff; }
+
+.widget-title { margin: 4px 6px 10px; font-size: 15px; font-weight: bold; color: @accent2; }
+.widget-title > button { background: alpha(@accent, 0.3); border: 1px solid alpha(@accent, 0.6); border-radius: 0; color: @fg; padding: 2px 10px; }
+
+.widget-buttons-grid { padding: 4px; }
+.widget-buttons-grid > flowbox > flowboxchild > button {
+  background: alpha(@glass-strong, 0.8);
+  border: 1px solid alpha(@accent, 0.4);
+  border-radius: 0;
+  color: @fg;
+  min-height: 48px;
+  margin: 3px;
+}
+.widget-buttons-grid > flowbox > flowboxchild > button.toggle:checked {
+  background: alpha(@accent, 0.75);
+  color: #ffffff;
+}
+.widget-buttons-grid > flowbox > flowboxchild > button:hover { border-color: @accent2; }
+
+.widget-volume, .widget-backlight { padding: 6px 10px; color: @fg; }
+.widget-volume trough, .widget-backlight trough { background: alpha(@muted, 0.35); min-height: 6px; border-radius: 0; }
+.widget-volume highlight, .widget-backlight highlight { background: @accent; border-radius: 0; }
+
+.widget-mpris .widget-mpris-player { background: @glass-strong; border: 1px solid alpha(@accent, 0.4); border-radius: 0; padding: 8px; margin: 6px 0; }
+.widget-mpris .widget-mpris-title { font-weight: bold; color: #fff; }
+
+.widget-dnd { margin: 6px; color: @fg; }
+.widget-dnd > switch { background: alpha(@muted, 0.4); border-radius: 0; }
+.widget-dnd > switch:checked { background: @accent; }
+.widget-dnd > switch slider { background: #ffffff; border-radius: 0; }
+
+.floating-notifications { background: transparent; }

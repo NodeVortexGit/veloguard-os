@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# veloguard-osd volume|mic|brightness up|down|mute — the media keys. Shows the
+# frosted pop-up near the bottom (swayosd) and changes the level; if the pop-up
+# isn't there or doesn't answer, it just changes the level (keys never go dead).
+what=${1:-}; how=${2:-}
+if pgrep -x swayosd-server >/dev/null; then
+  case "$what $how" in
+    "volume up")       swayosd-client --output-volume raise --max-volume 100 ;;
+    "volume down")     swayosd-client --output-volume lower ;;
+    "volume mute")     swayosd-client --output-volume mute-toggle ;;
+    "mic mute")        swayosd-client --input-volume mute-toggle ;;
+    "brightness up")   swayosd-client --brightness raise ;;
+    "brightness down") swayosd-client --brightness lower ;;
+    *) false ;;
+  esac >/dev/null 2>&1 && exit 0
+  # running but not answering (it can lose its D-Bus name if it starts during a
+  # compositor reload): start it fresh for the next key press, change the level now
+  { pkill -x swayosd-server; sleep 0.3; setsid -f swayosd-server >/dev/null 2>&1; } &
+fi
+case "$what $how" in
+  "volume up")       exec wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;;
+  "volume down")     exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;;
+  "volume mute")     exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
+  "mic mute")        exec wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle ;;
+  "brightness up")   exec brightnessctl -q s 5%+ ;;
+  "brightness down") exec brightnessctl -q s 5%- ;;
+  *) echo "usage: veloguard-osd volume|mic|brightness up|down|mute" >&2; exit 2 ;;
+esac

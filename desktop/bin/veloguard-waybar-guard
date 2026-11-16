@@ -20,16 +20,32 @@ if command -v ip >/dev/null 2>&1; then
   vpn_iface="$(ip -br link show type wireguard 2>/dev/null \
     | awk 'NR==1{sub(/@.*/,"",$1); print $1}')"
 fi
+# …or a provider app's tunnel (Proton/Nord/Surfshark run theirs through
+# NetworkManager). A plain tun device only counts when it carries the default
+# route — Tailscale, ZeroTier or a VM's tap is a tun too, and must not hide
+# the untrusted-Wi-Fi alarm.
+# Only TYPE and DEVICE are asked for — never the connection NAME: it's the
+# Wi-Fi's own name for a Wi-Fi connection, and a network called "Cafe:vpn"
+# would otherwise pass as a VPN (positional fields after free text).
+if [ -z "$vpn_iface" ] && command -v nmcli >/dev/null 2>&1; then
+  egress="$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')"
+  vpn_iface="$(nmcli -t -f TYPE,DEVICE connection show --active 2>/dev/null \
+    | awk -F: -v eg="$egress" '$1 ~ /^(vpn|wireguard)$/ || ($1 == "tun" && $2 == eg && eg != "") {print ($2 != "" ? $2 : $1); exit}')"
+fi
 
 # --- Wi-Fi: current SSID + trusted? -----------------------------------------
-ssid=""
-if command -v nmcli >/dev/null 2>&1; then
-  ssid="$(nmcli -t -f active,ssid dev wifi 2>/dev/null \
-    | awk -F: '$1=="yes"{print substr($0,5); exit}')"
+# Current SSID, unescaped: `nmcli -t` writes ':' inside an SSID as '\:' and
+# '\' as '\\'. The trusted-ssids list stores the real SSID (veloguard-wifi-trust
+# unescapes the same way), so an escaped compare never matched e.g. "Cafe:Guest".
+# Wi-Fi or wired, as the guard sees it (veloguard-netid): the trust key and a label.
+ssid=""; net_kind=""; net_label=""
+if [ -x /opt/veloguard/bin/veloguard-netid ]; then
+  IFS=$'\t' read -r net_kind ssid net_label _ _ < <(/opt/veloguard/bin/veloguard-netid 2>/dev/null) || true
+  case "$net_kind" in wifi|wired) ;; *) ssid="" ;; esac
 fi
 trusted="unknown"
 if [ -n "$ssid" ]; then
-  if [ -r "$TRUSTED_LIST" ] && grep -Fxq "$ssid" "$TRUSTED_LIST" 2>/dev/null; then
+  if [ -r "$TRUSTED_LIST" ] && grep -Fxq -- "$ssid" "$TRUSTED_LIST" 2>/dev/null; then
     trusted="yes"
   else
     trusted="no"
@@ -49,10 +65,11 @@ if [ -n "$vpn_iface" ]; then
 else
   vpn_line="VPN: off"
 fi
+what="Wi-Fi"; [ "$net_kind" = wired ] && what="Wired"
 case "$trusted" in
-  yes)     wifi_line="Wi-Fi: $ssid (trusted)";;
-  no)      wifi_line="Wi-Fi: $ssid (untrusted)";;
-  *)       wifi_line="Wi-Fi: not connected";;
+  yes)     wifi_line="$what: ${net_label:-$ssid} (trusted)";;
+  no)      wifi_line="$what: ${net_label:-$ssid} (untrusted)";;
+  *)       wifi_line="Network: not connected";;
 esac
 if [ -n "$update_version" ]; then
   update_line="Update: kernel $update_version staged"
@@ -60,12 +77,27 @@ else
   update_line="Update: none staged"
 fi
 
-tooltip="🛡 VeloGuard\n${vpn_line}\n${wifi_line}\n${update_line}\n\nClick: guard menu  ·  Right-click: VPN"
+# --- An active root grant (veloguard-elevate --grant)? Shown on purpose: ----
+# unattended root is never invisible.
+grant_line=""
+GRANT_STATUS="${VELOGUARD_GRANT_STATUS:-/run/veloguard-grant.status}"
+if [ -r "$GRANT_STATUS" ]; then
+  read -r g_exp g_agent < "$GRANT_STATUS" 2>/dev/null || true
+  now=$(date +%s)
+  if [[ ${g_exp:-} =~ ^[0-9]+$ ]] && [ "$g_exp" -gt "$now" ]; then
+    left=$(( (g_exp - now) / 60 ))
+    grant_line="Root grant: ${g_agent:-an agent} — $((left / 60))h $((left % 60))m left (veloguard-elevate --revoke)"
+  fi
+fi
+
+tooltip="🛡 VeloGuard"$'\n'"${vpn_line}"$'\n'"${wifi_line}"$'\n'"${update_line}"${grant_line:+$'\n'"⚠ ${grant_line}"}$'\n\n'"Click: guard menu  ·  Right-click: VPN"
 
 # --- Decide primary class + text (priority order) ---------------------------
 # untrusted-Wi-Fi-without-VPN is the loudest state, then staged update, then VPN.
 text="🛡"
-if [ "$trusted" = "no" ] && [ -z "$vpn_iface" ]; then
+if [ -n "$grant_line" ]; then
+  cls="grant"; text="🛡 root"
+elif [ "$trusted" = "no" ] && [ -z "$vpn_iface" ]; then
   cls="untrusted"; text="🛡!"
 elif [ -n "$update_version" ]; then
   cls="update"; text="🛡⬆"
@@ -75,5 +107,15 @@ else
   cls="ok"
 fi
 
-# --- Emit JSON (escape backslash newlines for Waybar tooltip) ---------------
-printf '{"text":"%s","tooltip":"%s","class":"%s"}\n' "$text" "$tooltip" "$cls"
+# --- Emit JSON ---------------------------------------------------------------
+# Every string is JSON-escaped: the tooltip carries the SSID, which whoever runs
+# the access point chooses. Raw, a '"' broke the module and a crafted name could
+# inject its own "text"/"class" fields — spoofing the guard's own indicator.
+json_esc() {
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"; s="${s//$'\n'/\\n}"; s="${s//$'\r'/}"
+  printf '%s' "$s" | tr -d '\000-\010\013\014\016-\037'
+}
+printf '{"text":"%s","tooltip":"%s","class":"%s"}\n' \
+  "$(json_esc "$text")" "$(json_esc "$tooltip")" "$(json_esc "$cls")"

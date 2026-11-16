@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""veloguard-netid — which network is this machine on, as the guard sees it.
+
+One answer for every part of the guard (auto-protect, the trust toggle, the
+bar, the login check), Wi-Fi and wired alike — zero trust: an unknown cable is
+no more trustworthy than an unknown Wi-Fi.
+
+  veloguard-netid              # TSV: kind  key  label  security  iface
+  veloguard-netid --json
+  veloguard-netid --resolve    # wired: ping the gateway once if its MAC isn't known yet
+
+  kind      wifi | wired | none
+  key       what trust is stored under: the SSID for Wi-Fi; for wired
+            "wired:<gateway MAC>" — a cable has no name, the router behind it
+            does (the same every time you plug into that network)
+  label     for people: the SSID, or the NetworkManager connection's name
+  security  Wi-Fi's (wpa2, open…); "wired" for cables
+
+The interface carrying the default route decides (tunnels skipped: under a
+VPN it's the network the tunnel runs over). Prints "none" when offline.
+Never trusts what it can't identify: a wired network whose gateway MAC can't
+be read gets key "wired:unknown", which is never in the trusted list.
+"""
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+
+TUNNEL = re.compile(r"^(wg|tun|tap|proton|nordlynx|nordtun|tailscale|zt|wt|ipsec|ppp|veth|docker|br-|virbr)")
+WIFI = re.compile(r"^(wl|wlan|wlp)")
+MAC = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+
+
+def run(*argv: str) -> str:
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def default_route() -> tuple[str, str] | None:
+    """(iface, gateway) of the best non-tunnel default route, v4 then v6."""
+    for fam in ("-4", "-6"):
+        try:
+            routes = json.loads(run("ip", "-j", fam, "route", "show", "default") or "[]")
+        except ValueError:
+            routes = []
+        routes = [r for r in routes if r.get("dev") and not TUNNEL.match(r["dev"])]
+        routes.sort(key=lambda r: r.get("metric", 0))
+        for r in routes:
+            if r.get("gateway"):
+                return r["dev"], r["gateway"]
+        if routes:
+            return routes[0]["dev"], ""
+    return None
+
+
+def unescape(s: str) -> str:
+    return re.sub(r"\\(.)", r"\1", s)
+
+
+def wifi(iface: str) -> tuple[str, str] | None:
+    for line in run("nmcli", "-t", "-f", "ACTIVE,SECURITY,SSID", "dev", "wifi", "list", "ifname", iface).splitlines():
+        if line.startswith("yes:"):
+            rest = line[4:]
+            sec, _, ssid = rest.partition(":")
+            return unescape(ssid), (sec or "open")
+    return None
+
+
+def gateway_mac(iface: str, gw: str, resolve: bool) -> str:
+    if not gw:
+        return ""
+    for attempt in (0, 1):
+        try:
+            for n in json.loads(run("ip", "-j", "neigh", "show", gw, "dev", iface) or "[]"):
+                mac = (n.get("lladdr") or "").lower()
+                if MAC.match(mac):
+                    return mac
+        except ValueError:
+            pass
+        if attempt == 0 and resolve:
+            run("ping", "-c", "1", "-W", "1", "-I", iface, gw)
+        else:
+            break
+    return ""
+
+
+def connection_name(iface: str) -> str:
+    for line in run("nmcli", "-t", "-f", "DEVICE,CONNECTION", "device").splitlines():
+        dev, _, con = line.partition(":")
+        if dev == iface and con:
+            return unescape(con)
+    return iface
+
+
+def identify(resolve: bool = False) -> dict:
+    r = default_route()
+    if not r:
+        return {"kind": "none", "key": "", "label": "not connected", "security": "", "iface": ""}
+    iface, gw = r
+    if WIFI.match(iface):
+        w = wifi(iface)
+        if w:
+            return {"kind": "wifi", "key": w[0], "label": w[0], "security": w[1], "iface": iface}
+    mac = gateway_mac(iface, gw, resolve)
+    return {"kind": "wired", "key": f"wired:{mac or 'unknown'}",
+            "label": connection_name(iface), "security": "wired", "iface": iface,
+            "gateway": gw, "gateway_mac": mac}
+
+
+def main() -> int:
+    n = identify(resolve="--resolve" in sys.argv)
+    if "--json" in sys.argv:
+        print(json.dumps(n))
+    else:
+        # TSV; tabs/newlines in an SSID (attacker-chosen) can't split fields
+        clean = lambda s: re.sub(r"[\t\r\n]", " ", s or "")
+        print("\t".join(clean(n[k]) for k in ("kind", "key", "label", "security", "iface")))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

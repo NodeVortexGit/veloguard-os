@@ -84,13 +84,24 @@ from older builds is simply ignored.
 
 ## What the guard guarantees today
 
-- **Protected ranges** — the AI can never block loopback, RFC1918, or
-  link-local. It cannot be talked into locking you out of your own box.
+- **Protected ranges** — the AI can never block loopback, RFC1918, CGNAT,
+  link-local, IPv6 ULA, multicast or broadcast. It cannot be talked into
+  locking you out of your own box.
+- **Shaped targets** — process targets are a PID or an exact process name,
+  VPN profiles a WireGuard interface name: no paths, patterns or options ever
+  reach the root-run `pkill`/`rm`/`wg-quick` (tests: `tests/test_guard.py`).
+- **Fail closed** — `sandbox_run` refuses to run at all when no isolation
+  layer is installed, instead of running the command unsandboxed.
 - **Consent gate** — state-changing actions stop and ask, unless `--yes`.
-- **Rate limit** — sliding window caps runaway action storms.
-- **Audit** — every decision (allowed, denied, aborted) is one JSON line in
-  `audit.log`.
+- **Rate limit** — sliding window caps runaway action storms (shared across
+  calls in long-running servers: MCP, agent loop, honeypot).
+- **Audit** — every decision (allowed, denied, aborted, failed) is one JSON
+  line in `audit.log`: `/var/log/veloguard/audit.log` for root, the checkout's
+  `audit.log` in a dev tree, else `~/.config/veloguard/audit.log`
+  (`$VELOGUARD_AUDIT_LOG` overrides).
 - **Dry-run default** — nothing touches the kernel without `--apply`.
+
+Run the guard's regression tests: `python3 -m unittest discover -s tests -v`.
 
 ## Layout
 
@@ -168,6 +179,40 @@ veloguard honeypot --ports 2222,8080,2323 --analyze --block
 Diagnosis happens entirely on your own hardware — nothing leaves the box.
 (The heuristic tier is verified live: it flagged a sqlmap+dropper attack HIGH.)
 
+## Always on — `veloguard watch`, the honeypot service, your agent's report
+
+Nothing above waits to be asked any more:
+
+- **`veloguard watch`** (user service `veloguard-watch`): ClamAV scans every new
+  download (a hit is moved to `~/.local/share/veloguard/quarantine`, mode 000);
+  every new process is checked for running from memory, from Downloads/tmp,
+  deleting its own file, miner or reverse-shell command lines — a match is
+  **frozen** (SIGSTOP + children). Clean new *programs* get a quiet "run in a
+  sandbox / check with your agent" notification.
+- **`veloguard-honeypot.service`**: the decoys run all the time with auto-block;
+  their ports open in the zero-trust firewall only while it runs, and 22/23/21/80
+  are pointed at them when nothing real listens there. Local-network attackers
+  can be blocked too — never the gateway, the DNS servers or this machine.
+- **The report**: every incident goes to the *current* agent (`veloguard-agent
+  set …`, else the guard's brain), sandboxed with tools off, evidence framed as
+  data; a virus sample is first **detonated in the Firecracker micro-VM** (no
+  network) and what it did goes into the report. The notification carries the
+  verdict and the buttons (Kill it / Let it run, Delete / Restore, Open report,
+  Investigate). 8 reports an hour, 40 a day, one per attacker IP per 12 h.
+
+`veloguard watch status` · `veloguard detonate FILE` · reports in
+`~/.local/share/veloguard/reports`.
+
+## Every restriction is yours to approve
+
+An agent never gets what the guard restricts *by itself* — but the person can
+give it: switching the guard off or rewriting its files, what malware does,
+reading credentials — each is an **Approve/Deny pop-up** with the exact command,
+folder and reason (`guardd/approve.py`; root commands keep the root-drawn dialog
+of `veloguard-elevate-root`). Deny is the default; no answer in 90 s is a Deny;
+every answer is in the audit log. Claude Code keeps its own prompt for warnings;
+Codex, Kimi Code, Hermes and OpenClaw ask on the desktop.
+
 ## Running the guard on a compatible Python
 
 ChromaDB lags the newest Python. Instead of pinning the whole system,
@@ -199,7 +244,7 @@ Tiered by risk (degrades to the strongest tier installed — `install-sandbox.sh
 |------|------|-----------|------|
 | **light** (default) | bubblewrap + RAM tmpfs, no network | namespaces, ephemeral writes | low risk / installed apps |
 | **strong** | gVisor `runsc` | userspace syscall kernel | medium risk |
-| **vm** | Firecracker microVM (VeloGuardOS kernel as guest) | separate kernel | high risk / downloaded binaries |
+| **vm** | Firecracker micro-VM (Firecracker's guest kernel, read-only Ubuntu root, no NIC) | separate kernel | high risk / downloaded binaries — `veloguard detonate` |
 
 The AI assesses run-risk (`vlayer.assess_risk` — local high-end models reason
 deepest, per the [model bonus](#the-bonus-for-the-tech-community-depth-scales-with-your-model));

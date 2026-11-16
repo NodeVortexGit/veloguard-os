@@ -26,6 +26,12 @@ def classify(ssid: str | None, bssid: str | None,
         return "untrusted", f"you marked this network {stored} before"
 
     sec = (security or "").strip().lower()
+    if sec == "wired":
+        # Zero trust: a cable proves nothing about who's on the other end
+        # (hotel, office, someone's switch). Unknown until you trust it.
+        if (ssid or "") == "wired:unknown":
+            return "untrusted", "wired network whose router can't be identified — can't be trusted"
+        return "unknown", "first time on this wired network"
     if sec in OPEN:
         return "untrusted", "open network with no encryption — high risk"
     return "unknown", "first time on this network"

@@ -1,0 +1,7 @@
+{
+  "name": "veloguard-guard",
+  "version": "0.1.0",
+  "description": "VeloGuardOS: the guard checks OpenClaw's shell and file-edit tools before they run.",
+  "type": "module",
+  "openclaw": { "extensions": ["./index.js"] }
+}

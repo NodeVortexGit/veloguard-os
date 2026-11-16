@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# veloguard-quickpanel [--usage] — the top bar's quick panel (Quickshell,
+# /etc/xdg/quickshell/veloguard): toggles, sliders, media, AI plan usage.
+# Super alone and the bar's 󰒓 open it; --usage (the bar's AI-usage button)
+# opens it scrolled to the usage bars. Notifications are separate: the bell
+# and Super+N (swaync).
+fn=toggle; [ "${1:-}" = --usage ] && fn=usage
+qs -c veloguard ipc call panel "$fn" >/dev/null 2>&1 && exit 0
+# not running yet (the first seconds of a session, or it crashed): start it
+setsid -f qs -c veloguard -n >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 0.3; qs -c veloguard ipc call panel "$fn" >/dev/null 2>&1 && exit 0
+done
+exec veloguard-guard-menu          # Quickshell missing: the guard menu at least

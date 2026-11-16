@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# veloguard-session-start <program> [args…] — start a session component (the
+# bar, the notification daemon) from the Hyprland autostart so that:
+#   - its output lands in the journal (journalctl -t <program>) instead of
+#     /dev/null — a component that dies at login used to leave no trace;
+#   - a crash during login, when everything starts at once (a cold first boot
+#     especially), is retried instead of leaving the session without it.
+# One that ran for a while and then stopped (stopped on purpose) stays down.
+set -u
+[ $# -ge 1 ] || { echo "usage: veloguard-session-start <program> [args…]" >&2; exit 2; }
+name="$(basename "$1")"
+run() { if command -v systemd-cat >/dev/null 2>&1; then systemd-cat -t "$name" "$@"; else "$@"; fi; }
+for attempt in 1 2 3 4 5; do
+  start=$(date +%s)
+  run "$@" && exit 0
+  rc=$?
+  [ $(( $(date +%s) - start )) -ge 30 ] && exit "$rc"
+  echo "$name exited with $rc during startup (attempt $attempt/5) — starting it again" \
+    | { systemd-cat -t "$name" -p warning 2>/dev/null || cat >&2; }
+  sleep 3
+done
+exit 1

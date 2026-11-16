@@ -1,0 +1,57 @@
+{
+  "name": "openclaw",
+  "label": "OpenClaw",
+  "vendor": "OpenClaw",
+  "bin": "openclaw",
+  "bin_paths": [
+    "/usr/bin/openclaw",
+    "~/.local/bin/openclaw"
+  ],
+  "signin": "openclaw onboard",
+  "home": {
+    "overlay": [
+      "~/.openclaw"
+    ],
+    "files": [],
+    "ro": []
+  },
+  "env": [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY"
+  ],
+  "brain": {
+    "_why": "infer model run: ONE model turn, no agent, no tools \u2014 the safe shape for attacker-written evidence (incident reports). Goes through the running Gateway when there is one (it owns the credentials and shared state), else runs locally. --json: the answer is outputs[].text.",
+    "argv": [
+      "openclaw",
+      "infer",
+      "model",
+      "run",
+      "--gateway",
+      "--json"
+    ],
+    "model_flag": "--model",
+    "prompt": "arg",
+    "prompt_flag": "--prompt",
+    "output": "json"
+  },
+  "launch": {
+    "argv": [
+      "openclaw",
+      "chat"
+    ],
+    "_why": "chat = the terminal UI, local (no Gateway needed)"
+  },
+  "ask": {
+    "argv": [
+      "openclaw",
+      "chat"
+    ],
+    "prompt": "flag",
+    "prompt_flag": "--message"
+  },
+  "sandbox": {
+    "share_pid": true,
+    "_why": "OpenClaw refuses to touch its shared state unless it can see the Gateway that owns it (same PID namespace). The brain call is tool-free (infer model run), so seeing the process list is all this shares."
+  }
+}

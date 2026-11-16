@@ -20,7 +20,13 @@ priv() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 # Run a command as the real desktop user (defaults are per-user, not root).
-USER_NAME="${SUDO_USER:-$USER}"
+# Under the installer (root, in the target chroot) there is no SUDO_USER —
+# use the account Calamares just created, not root.
+# The installer passes the new account as $1.
+USER_NAME="${1:-${SUDO_USER:-}}"
+getent passwd "$USER_NAME" >/dev/null 2>&1 || USER_NAME=""
+[ -n "$USER_NAME" ] || USER_NAME="$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}')"
+USER_NAME="${USER_NAME:-$USER}"
 as_user() { sudo -u "$USER_NAME" env XDG_RUNTIME_DIR="/run/user/$(id -u "$USER_NAME")" "$@"; }
 
 # --- 1. Flatpak + Flathub --------------------------------------------------
@@ -30,8 +36,11 @@ ensure_flatpak() {
     elif command -v apt-get >/dev/null; then priv apt-get update && priv apt-get install -y flatpak
     elif command -v pacman  >/dev/null; then priv pacman -S --noconfirm --needed flatpak; fi
   }
+  # The repo file, not a .flatpakref: the old flathub.org/…/flathub.flatpakref
+  # URL is a 404, so under `set -e` this script died here and never installed
+  # a single default app.
   flatpak remote-add --if-not-exists flathub \
-    https://flathub.org/repo/flathub.flatpakref
+    https://dl.flathub.org/repo/flathub.flatpakrepo
 }
 
 # --- 2. the app set, from Flathub (system-wide) ----------------------------
@@ -44,10 +53,71 @@ FLATPAKS=(
   org.libreoffice.LibreOffice
   com.transmissionbt.Transmission
 )
+# One app per transaction: a single failure used to abort the whole set (Viber
+# failed inside the installer and took Discord, Dolphin, ZapZap, LibreOffice
+# and Transmission down with it). Apps that ship "extra data" (Viber) unpack
+# it in a bubblewrap sandbox, which cannot start inside the installer's
+# chroot — those, and anything that hit a network hiccup, are queued and
+# installed by veloguard-flatpak-pending.service on the first online boot.
+PENDING=/var/lib/veloguard/flatpak-pending
 install_flatpaks() {
   say "installing Flatpak apps (Brave, Discord, Dolphin, Viber, ZapZap, LibreOffice, Transmission)…"
-  flatpak install -y --system flathub "${FLATPAKS[@]}" \
-    || warn "some Flatpaks failed — re-run; Flathub may be rate-limited"
+  # Queue everything first and strike apps off as they land: if the installer
+  # stops this step at its time limit (slow link), whatever is left is still
+  # picked up on first boot.
+  queue_pending "${FLATPAKS[@]}"
+  local app failed=()
+  for app in "${FLATPAKS[@]}"; do
+    if flatpak install -y --noninteractive --system flathub "$app"; then
+      sed -i "/^${app//./\\.}\$/d" "$PENDING"
+    else
+      failed+=("$app")
+    fi
+  done
+  if [ "${#failed[@]}" -eq 0 ]; then
+    rm -f "$PENDING" /etc/systemd/system/multi-user.target.wants/veloguard-flatpak-pending.service
+    return 0
+  fi
+  warn "not installed yet: ${failed[*]} — will be installed on the first online boot"
+}
+
+queue_pending() {
+  mkdir -p "${PENDING%/*}"
+  printf '%s\n' "$@" > "$PENDING"
+  install -Dm755 /dev/stdin /usr/local/lib/veloguard/flatpak-pending <<'SH'
+#!/bin/sh
+# Install the default apps the installer could not (see install-default-apps.sh).
+list=/var/lib/veloguard/flatpak-pending
+[ -s "$list" ] || { rm -f "$list"; exit 0; }
+left=
+while read -r app; do
+  [ -n "$app" ] || continue
+  flatpak info --system "$app" >/dev/null 2>&1 && continue
+  flatpak install -y --noninteractive --system flathub "$app" || left="$left$app
+"
+done < "$list"
+if [ -n "$left" ]; then printf '%s' "$left" > "$list"; exit 1; fi
+rm -f "$list"
+SH
+  install -Dm644 /dev/stdin /etc/systemd/system/veloguard-flatpak-pending.service <<'UNIT'
+[Unit]
+Description=VeloGuardOS: install default apps the installer had to postpone
+ConditionPathExists=/var/lib/veloguard/flatpak-pending
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/veloguard/flatpak-pending
+Restart=on-failure
+RestartSec=2min
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  mkdir -p /etc/systemd/system/multi-user.target.wants
+  ln -sf ../veloguard-flatpak-pending.service \
+    /etc/systemd/system/multi-user.target.wants/veloguard-flatpak-pending.service
 }
 
 # --- 3. native: GNOME Software (+Flatpak plugin) and Waydroid ---------------

@@ -27,7 +27,7 @@ jobs:
       - name: Install toolchain (kernel makedepends + makepkg)
         run: |
           pacman -Syu --noconfirm --needed \
-            base-devel git bc cpio gettext libelf pahole perl python tar xz zstd kmod
+            base-devel git bc cpio gettext libelf openssl pahole perl python tar xz zstd kmod
 
       - name: Create build user (makepkg refuses to run as root)
         run: |
@@ -49,7 +49,7 @@ jobs:
         with:
           name: linux-veloguard
           path: |
-            out/*.pkg.tar.zst
+            out/linux-veloguard-*.pkg.tar.zst
             out/kernel-manifest.json
           if-no-files-found: error
       # NOTE: releasing is deliberate, not automatic — a human/agent uploads the

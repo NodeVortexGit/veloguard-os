@@ -14,11 +14,13 @@ HOME_DIR="${VELOGUARD_HOME:-/opt/veloguard}"
 
 command -v nmcli >/dev/null || { echo "nmcli not found" >&2; exit 0; }
 
-# Active Wi-Fi line: ACTIVE:SSID:SECURITY
-line="$(nmcli -t -f ACTIVE,SSID,SECURITY dev wifi 2>/dev/null | awk -F: '$1=="yes"{print; exit}')"
-ssid="$(printf '%s' "$line" | cut -d: -f2)"
-sec="$(printf '%s' "$line" | cut -d: -f3)"
-[ -n "$ssid" ] || exit 0   # not on Wi-Fi (e.g. wired) — nothing to do
+# Wi-Fi or wired, one identity (veloguard-netid; --resolve pings the gateway
+# once so a fresh cable's router MAC is known). Wired networks are keyed
+# "wired:<gateway MAC>": unknown → the guard fails safe and raises the VPN,
+# exactly like an unknown Wi-Fi. "wired:unknown" (no gateway MAC) is never
+# trusted.
+IFS=$'\t' read -r kind key label sec iface < <("$HOME_DIR/bin/veloguard-netid" --resolve 2>/dev/null)
+case "${kind:-}" in wifi|wired) ;; *) exit 0 ;; esac   # offline — nothing to do
 
 cd "$HOME_DIR"
-exec python3 -m guardd net --ssid "$ssid" --security "${sec:-open}" --yes --apply
+exec python3 -m guardd net --ssid "$key" --security "${sec:-open}" --yes --apply

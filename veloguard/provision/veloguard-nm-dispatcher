@@ -9,9 +9,11 @@
 #
 iface="${1:-}"; action="${2:-}"
 case "$action" in
-  up|vpn-up|connectivity-change)
+  up|vpn-up|connectivity-change|dhcp4-change|dhcp6-change)
+    # Wi-Fi AND wired (Ethernet, USB adapters, phone tethering) — zero trust:
+    # an unknown cable is no safer than an unknown Wi-Fi.
     case "$iface" in
-      wl*|wlan*|wlp*) /usr/local/bin/veloguard-netwatch || true ;;
+      wl*|wlan*|wlp*|en*|eth*|usb*) /usr/local/bin/veloguard-netwatch || true ;;
     esac
     ;;
 esac

@@ -1,11 +1,15 @@
-# VeloGuardOS desktop stack — Omarchy-style Hyprland, all from OFFICIAL Arch repos
-# (no AUR, so the ISO stays hermetic). Single source of truth: appended to the
+# VeloGuardOS desktop stack — Omarchy-style Hyprland, from OFFICIAL Arch repos plus
+# our own compositor package (no AUR, so the ISO stays hermetic). Single source of truth: appended to the
 # archiso package list by iso/build.sh and installed by
 # veloguard/provision/install-desktop.sh. One package per line; '#' comments and
 # blank lines are ignored by consumers.
 
-# Wayland compositor + session
-hyprland
+# Wayland compositor + session. The compositor is NodeVortex's Hyprland fork
+# (Hyprland 0.57 + a cursor per pointer device): it provides/conflicts
+# `hyprland`, comes from the local [veloguard] repo (iso/pkgs, recipe in
+# iso/pkgs-src/hyprland-multicursor) and is kept on installed systems under
+# /usr/share/veloguard/repo for re-installs.
+hyprland-multicursor
 hyprlock
 hypridle
 hyprpicker
@@ -17,8 +21,14 @@ qt5-wayland
 qt6-wayland
 kvantum
 
-# Bar, notifications, launcher, wallpaper, OSD
+# Bar, notifications (swaync), the quick panel (Quickshell: toggles, sliders,
+# media, AI plan usage), launcher (Albert — from the local [veloguard] repo,
+# iso/pkgs-src/albert; wofi for the bar's menus), wallpaper, the volume /
+# brightness pop-up (swayosd). mako stays as the fallback notification daemon.
 waybar
+swaync
+quickshell
+albert
 mako
 wofi
 swaybg
@@ -29,12 +39,13 @@ sddm
 
 # Polkit agent (VPN import / update-arming raise polkit prompts)
 polkit-gnome
+# Secret Service keyring: provider VPN apps (Proton, Surfshark) keep their
+# sign-in here; SDDM's PAM unlocks it at login, so you stay signed in.
+gnome-keyring
 
 # Terminal, editor, files, thumbnails
 alacritty
-neovim
-thunar
-thunar-volman
+vim
 tumbler
 gvfs
 
@@ -67,3 +78,12 @@ usbutils
 # Local AI agent brain (the guard's Ollama plane; the Claude plane needs only a
 # key and talks to the API over stdlib HTTP, so no extra package for it).
 ollama
+
+# Japanese + Bulgarian input (Super+Space cycles us · bg phonetic · jp; Mozc
+# only on jp) and CJK fonts
+fcitx5
+fcitx5-mozc
+fcitx5-gtk
+fcitx5-qt
+fcitx5-configtool
+noto-fonts-cjk

@@ -1,0 +1,15 @@
+[Unit]
+Description=VeloGuardOS hardware probe for the installer's Desktop page (live ISO)
+# Writes hw.js next to the Desktop page QML so the page can show what was
+# detected and pre-select Clean Config on laptops. Live only: the installer
+# removes this unit (and /etc/calamares) from installed systems.
+ConditionPathIsDirectory=/etc/calamares/branding/veloguardos
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/veloguard/provision/veloguard-hwprobe --js /etc/calamares/branding/veloguardos/hw.js
+
+[Install]
+WantedBy=multi-user.target

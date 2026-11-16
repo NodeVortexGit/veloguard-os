@@ -1,0 +1,6 @@
+[Unit]
+Description=Refresh the console login prompt (SSH link status)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/agetty --reload

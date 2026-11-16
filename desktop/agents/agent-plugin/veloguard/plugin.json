@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "veloguard",
+  "version": "0.1.0",
+  "description": "VeloGuardOS for any Agent Plugins host (Codex, Hermes, OpenClaw): the guard's MCP tools, its rules as a skill, and a guard check before shell and file-edit tools.",
+  "author": { "name": "VeloGuardOS" },
+  "keywords": ["security", "firewall", "vpn", "veloguard"]
+}

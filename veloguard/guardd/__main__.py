@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -43,7 +44,7 @@ from . import (__version__, agent, analyst, honeypot, memory, netclass, state,
 from .actions import Action, ActionType
 from .ai_adapter import get_adapter
 from .audit import record
-from .executor import NftExecutor
+from .executor import VPN_HELPER, NftExecutor
 from .policy import Decision, PolicyEngine, Verdict
 
 VELOGUARD_DIR = Path(__file__).resolve().parent.parent
@@ -52,7 +53,9 @@ CONFIG_PATH = VELOGUARD_DIR / "config.json"
 
 CONTROL_VERBS = {"setup", "use", "model", "key", "host", "status",
                  "providers", "net", "honeypot", "analyze", "run-safe",
-                 "update", "agent", "mcp", "voice", "help"}
+                 "update", "agent", "agents", "check-command", "incidents", "integrity",
+                 "audit", "mcp", "voice", "approve", "watch", "detonate",
+                 "help"}
 
 
 def _configured_adapter() -> str:
@@ -67,11 +70,18 @@ def _configured_adapter() -> str:
 # SETUP SCREEN — first-boot wizard (a friendly front-end over use/key/model)
 # ===========================================================================
 
-_BANNER = """
-\033[1;36m┌────────────────────────────────────────────────┐
-│  VeloGuardOS  ·  setup                          │
-│  AI-first. Local-only brain. Nothing leaves.    │
-└────────────────────────────────────────────────┘\033[0m"""
+def _boxed(*lines: str) -> str:
+    """A box drawn around `lines`, its width computed from them — the old
+    hand-drawn banner had text rows one column wider than its borders, so the
+    right edge stuck out. (Every character here is single-width.)"""
+    inner = max(len(line) for line in lines) + 4
+    rows = [f"│  {line.ljust(inner - 2)}│" for line in lines]
+    return "\n".join([f"┌{'─' * inner}┐", *rows, f"└{'─' * inner}┘"])
+
+
+_BANNER = ("\n\033[1;36m"
+           + _boxed("VeloGuardOS  ·  setup", "AI-first. Local-only brain. Nothing leaves.")
+           + "\033[0m")
 
 
 def _ask(prompt: str, default: str | None = None) -> str:
@@ -153,19 +163,55 @@ def _setup_ollama() -> None:
     print("  → Ollama plane selected — nothing leaves this machine.")
 
 
+def _setup_agent(name: str) -> None:
+    """An AI agent as the brain: install it if needed, sign in once, connect
+    VeloGuard's plugin into it (tools, rules, the check), make it active."""
+    import shutil
+    import subprocess
+    from . import agent_plugins
+    pl = agent_plugins.get(name)
+    print(f"\n  {pl.label} ({pl.vendor}) — as the brain it answers in a throwaway sandbox with "
+          "its tools off; opened (Super+Shift+A) it's its own app with VeloGuard's plugin.")
+    if not agent_plugins.status(pl)["installed"]:
+        if _ask(f"  {pl.label} isn't installed. Install it now? [Y/n]", "Y").lower() in ("y", "yes"):
+            subprocess.run(["veloguard-agent", "install", name], check=False)
+        if not agent_plugins.status(agent_plugins.get(name))["installed"]:
+            print(f"  ✗ not installed — later: veloguard-agent install {name}")
+            return
+    if shutil.which("veloguard-agent-connect"):
+        subprocess.run(["veloguard-agent-connect", name], check=False)
+    if pl.signin and _ask(f"  Sign in to {pl.label} now ({pl.signin})? [Y/n]", "Y").lower() in ("y", "yes"):
+        exe = pl.find_bin(os.path.expanduser("~"))
+        cmd = pl.signin.split("(")[0].split()
+        if exe and cmd:
+            subprocess.run([exe, *cmd[1:]], check=False)
+    state.set_active(name)
+    record({"control": "setup", "plane": name, "result": "ok"})
+    print(f"\n  → {pl.label} is the brain. Change it any time: veloguard-agent pick (or guard menu ▸ Switch AI agent…)")
+
+
 def _setup_wizard() -> int:
     print(_BANNER)
     if not sys.stdin.isatty():
         print("\033[2m(non-interactive input — reading answers from stdin)\033[0m")
 
-    plane = _choose("\nChoose your AI plane:", [
-        ("ollama", "Ollama — a LOCAL model, private & free (needs `ollama serve`)"),
-        ("claude", "Claude — Anthropic API, most capable (needs an API key)"),
-        ("snn",    "SNN    — VeloGuard's built-in local neural brain (lands soon)"),
-        ("mock",   "Mock   — offline keyword mode; deterministic, works today"),
-    ], default=4)
+    from . import agent_plugins
+    agents = []
+    for pl in agent_plugins.load_all().values():
+        st = agent_plugins.status(pl)
+        tag = "installed" if st["installed"] else "not installed yet — installs now"
+        agents.append((pl.name, f"{pl.label:<12} — AI agent ({pl.vendor}), via its plugin · {tag}"))
+    plane = _choose("\nChoose your AI plane (the brain the guard thinks with):", [
+        ("ollama", "Ollama       — a LOCAL model, private & free (needs `ollama serve`)"),
+        ("claude", "Claude API   — Anthropic API, most capable (needs an API key)"),
+        *agents,
+        ("snn",    "SNN          — VeloGuard's built-in local neural brain (lands soon)"),
+        ("mock",   "Mock         — offline keyword mode; deterministic, works today"),
+    ], default=len(agents) + 4)
 
-    if plane == "mock":
+    if state.is_agent(plane):
+        _setup_agent(plane)
+    elif plane == "mock":
         state.set_active("mock")
         record({"control": "setup", "plane": "mock", "result": "ok"})
         print("\n  → offline mock mode. Run 'guardd setup' again any time.")
@@ -177,7 +223,7 @@ def _setup_wizard() -> int:
         _setup_snn()
 
     active = state.active_provider(config_default=_configured_adapter())
-    if active in ("mock", "claude", "ollama") \
+    if (active in ("mock", "claude", "ollama") or state.is_agent(active)) \
             and _ask("\nTest the brain now? [Y/n]", "Y").lower() in ("y", "yes"):
         _test_connection(active)
 
@@ -211,16 +257,38 @@ def _vpn_up_through_guard(ex: NftExecutor, profile: str, note: str) -> str:
     audited message instead of a traceback — this path runs unattended from the
     NetworkManager dispatcher, where failing safe must not mean killing the net."""
     action = Action(ActionType.VPN_UP, {"target": profile} if profile else {})
-    decision = PolicyEngine.load(DEFAULT_POLICY_PATH).evaluate(action)
+    try:
+        action.validate()          # the profile comes from a stored pref
+    except ValueError as exc:
+        record({"control": "net", "action": "vpn_up", "target": profile,
+                "result": "invalid", "error": str(exc), "note": note})
+        return f"VPN not applied — {exc}"
+    decision = PolicyEngine.shared(DEFAULT_POLICY_PATH).evaluate(action)
     if decision.verdict == Verdict.DENY:
         return f"VPN blocked by policy: {decision.reason}"
+    # Was a tunnel already carrying the traffic? Then it isn't ours to drop
+    # later; only a VPN raised HERE is marked auto-started (trusting the
+    # network takes that one down again — see veloguard-vpn drop-auto).
+    was_up = ex.apply and _vpn_helper("active")
     try:
-        out, result = ex.vpn_up(profile), "executed"
-    except RuntimeError as exc:
+        out, result = ex.vpn_up(action.params.get("target")), "executed"
+    except (RuntimeError, ValueError) as exc:
         out, result = f"VPN not applied — {exc}", "failed"
+    if ex.apply and result == "executed" and not was_up:
+        _vpn_helper("mark-auto", note)
     record({"control": "net", "action": "vpn_up", "target": profile,
             "result": result, "output": out, "note": note})
     return out
+
+
+def _vpn_helper(*args: str) -> bool:
+    """Run bin/veloguard-vpn quietly; True on exit 0. Never raises."""
+    import subprocess
+    try:
+        return subprocess.run([VPN_HELPER, *args], capture_output=True,
+                              timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def _net(rest: list[str]) -> int:
@@ -277,6 +345,49 @@ def _active_adapter():
         return None, provider, cfg.get("model")
 
 
+def _lan_neighbours_to_keep() -> set[str]:
+    """Never block these, whatever they did: the gateway(s), the DNS servers,
+    this machine's own addresses."""
+    import subprocess as sp
+    keep: set[str] = set()
+    for fam in ("-4", "-6"):
+        try:
+            for r in json.loads(sp.run(["ip", "-j", fam, "route", "show", "default"], capture_output=True,
+                                       text=True, timeout=5).stdout or "[]"):
+                if r.get("gateway"):
+                    keep.add(r["gateway"])
+            for a in json.loads(sp.run(["ip", "-j", fam, "addr"], capture_output=True,
+                                       text=True, timeout=5).stdout or "[]"):
+                for i in a.get("addr_info", []):
+                    keep.add(i.get("local", ""))
+        except (OSError, ValueError, sp.SubprocessError):
+            pass
+    try:
+        for line in Path("/etc/resolv.conf").read_text().splitlines():
+            if line.startswith("nameserver"):
+                keep.add(line.split()[1])
+        out = sp.run(["resolvectl", "dns"], capture_output=True, text=True, timeout=5).stdout
+        keep.update(re.findall(r"(\d+\.\d+\.\d+\.\d+|[0-9a-f:]{3,})", out))
+    except (OSError, sp.SubprocessError):
+        pass
+    return keep
+
+
+def _lan_blockable(ip: str) -> bool:
+    """A honeypot visitor on the local network (where nearly all of a laptop's
+    probes come from: public Wi-Fi, a compromised device at home) may be
+    blocked even though private ranges are protected for everything else —
+    except the gateway, DNS and our own addresses, which never are."""
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if not a.is_private or a.is_loopback or a.is_link_local or a.is_multicast or a.is_unspecified:
+        return False
+    return ip not in _lan_neighbours_to_keep()
+
+
 def _auto_block(ex: NftExecutor, ip: str) -> str:
     """Protective auto-block of a confirmed attacker (the --block flag is consent)."""
     action = Action(ActionType.BLOCK_IP, {"ip": ip})
@@ -284,11 +395,18 @@ def _auto_block(ex: NftExecutor, ip: str) -> str:
         action.validate()
     except ValueError as e:
         return f"not blocked: {e}"
-    decision = PolicyEngine.load(DEFAULT_POLICY_PATH).evaluate(action)
-    if decision.verdict == Verdict.DENY:
+    engine = PolicyEngine.shared(DEFAULT_POLICY_PATH)
+    decision = engine.evaluate(action)          # protected ranges + rate limit
+    if decision.verdict == Verdict.DENY and not _lan_blockable(ip):
         return f"not blocked: {decision.reason}"
-    out = ex.block_ip(ip)
-    record({"control": "honeypot", "action": "block_ip", "params": {"ip": ip},
+    try:
+        out = ex.block_ip(action.params["ip"])
+    except RuntimeError as e:
+        record({"control": "honeypot", "action": "block_ip", "params": action.params,
+                "result": "failed", "error": str(e)})
+        return f"not blocked: {e}"
+    engine.record(action)                        # count it toward the rate limit
+    record({"control": "honeypot", "action": "block_ip", "params": action.params,
             "result": "executed", "output": out})
     return out
 
@@ -321,12 +439,19 @@ def _honeypot(rest: list[str]) -> int:
               f"  {cap['bytes']}B")
         memory.log_decision("honeypot", cap["src_ip"], "captured",
                             f"{cap['service']} {cap['bytes']}B")
+        rep = None
         if adapter:
             rep = analyst.analyze_capture(cap, adapter, provider, model)
             print(f"  ── AI diagnosis ({rep['tier']}) ──\n  "
                   + rep["report"].replace("\n", "\n  "))
-        if args.block:
-            print("  " + _auto_block(ex, cap["src_ip"]))
+        blocked = _auto_block(ex, cap["src_ip"]) if args.block else None
+        if blocked:
+            print("  " + blocked)
+        # An incident the person (and the agent they pick) can look into.
+        from . import incident
+        incident.save("honeypot",
+                      f"{cap['service']} attack from {cap['src_ip']} ({cap['bytes']} B)",
+                      {"capture": cap, "diagnosis": rep, "auto_block": blocked})
 
     print(f"VeloGuard honeypot starting on ports {ports}")
     honeypot.run(ports, on_capture)
@@ -367,7 +492,11 @@ def _agent(rest: list[str]) -> int:
         del rest[i:i + 2]
     if "--max-steps" in rest:
         i = rest.index("--max-steps")
-        max_steps = int(rest[i + 1]) if i + 1 < len(rest) else 8
+        raw = rest[i + 1] if i + 1 < len(rest) else "8"
+        if not raw.isdigit() or not 1 <= int(raw) <= 50:
+            print("--max-steps must be an integer 1-50", file=sys.stderr)
+            return 2
+        max_steps = int(raw)
         del rest[i:i + 2]
     if autonomy not in ("read", "guarded", "full"):
         autonomy = "guarded"
@@ -442,11 +571,18 @@ def _update(rest: list[str]) -> int:
 
         if sub == "apply":
             # Verification happens inside the updater regardless of consent.
+            # The kernel domain means the shippable path — stage the signed
+            # prebuilt package for apply-on-reboot. Compiling from source
+            # (--build) is the developer/kernel-tree path only.
+            def _kernel(dry: bool) -> str:
+                if build:
+                    return updater.apply_kernel(build=True, dry_run=dry)
+                return updater.stage_kernel(dry_run=dry)
             if not do_apply:
                 if domain in ("all", "veloguard"):
                     print(updater.apply_veloguard(dry_run=True))
                 if domain in ("all", "kernel"):
-                    print(updater.apply_kernel(build=build, dry_run=True))
+                    print(_kernel(True))
                 print("\n(preview only — add --apply to execute)")
                 return 0
             if not yes:
@@ -459,7 +595,7 @@ def _update(rest: list[str]) -> int:
             if domain in ("all", "veloguard"):
                 out.append(updater.apply_veloguard(dry_run=False))
             if domain in ("all", "kernel"):
-                out.append(updater.apply_kernel(build=build, dry_run=False))
+                out.append(_kernel(False))
             for line in out:
                 print(line)
             record({"control": "update", "sub": "apply", "domain": domain,
@@ -536,7 +672,7 @@ def _run_safe(rest: list[str]) -> int:
     except ValueError as e:
         print(e, file=sys.stderr)
         return 2
-    decision = PolicyEngine.load(DEFAULT_POLICY_PATH).evaluate(action)
+    decision = PolicyEngine.shared(DEFAULT_POLICY_PATH).evaluate(action)
     if decision.verdict == Verdict.DENY:
         print(f"DENIED: {decision.reason}", file=sys.stderr)
         return 1
@@ -551,6 +687,182 @@ def _run_safe(rest: list[str]) -> int:
 # ===========================================================================
 # CONTROL PLANE — the hot-swap commands
 # ===========================================================================
+
+def _integrity(rest: list[str]) -> int:
+    """guardd integrity update | check — the guard checks its own files."""
+    from . import incident, integrity
+    sub = rest[0] if rest else "check"
+    if os.geteuid() != 0:
+        print("integrity needs root (the baseline is root-only)", file=sys.stderr)
+        return 2
+    if sub == "update":
+        n = integrity.update()
+        record({"control": "integrity", "action": "update", "files": n, "result": "ok"})
+        print(f"baseline: {n} guard files")
+        return 0
+    r = integrity.check()
+    if r.get("no_baseline"):
+        n = integrity.update()
+        print(f"no baseline yet — took one ({n} files)")
+        return 0
+    bad = r["changed"] + r["added"] + r["removed"]
+    if not bad:
+        print("✓ the guard's files are as deployed")
+        return 0
+    record({"control": "integrity", "action": "check", "result": "mismatch", **r})
+    incident.save("integrity", f"VeloGuard's own files changed outside a deploy ({len(bad)})", r)
+    for k in ("changed", "added", "removed"):
+        for f in r[k]:
+            print(f"  {k:8} {f}")
+    return 1
+
+
+def _incidents(rest: list[str]) -> int:
+    """guardd incidents [--latest | --show ID] [--json] — what the guard caught."""
+    from . import incident
+    as_json = "--json" in rest
+    if "--latest" in rest or "--show" in rest:
+        iid = rest[rest.index("--show") + 1] if "--show" in rest and rest.index("--show") + 1 < len(rest) else "latest"
+        inc = incident.get(iid)
+        if not inc:
+            print("no such incident" if iid != "latest" else "no incidents", file=sys.stderr)
+            return 1
+        print(json.dumps(inc, indent=2, default=str) if as_json else incident.as_text(inc))
+        return 0
+    rows = incident.latest(20)
+    if as_json:
+        print(json.dumps(rows, default=str))
+    elif not rows:
+        print("no incidents — nothing caught")
+    else:
+        for r in rows:
+            print(f"  {r['id']:<34} {r['title']}")
+    return 0
+
+
+def _check_command(rest: list[str]) -> int:
+    """guardd check-command [--write PATH] [--json] [-- CMD…]: is this OK for an
+    AI agent to run (or write)? The command (or the file's new text, with
+    --write) comes from the arguments after --, else stdin. Exit 0 allow,
+    1 warn, 3 deny; --json prints {"verdict", "reason"} either way."""
+    from . import cmdguard
+    as_json = "--json" in rest
+    write = None
+    if "--write" in rest:
+        i = rest.index("--write")
+        write = rest[i + 1] if i + 1 < len(rest) else ""
+    tail = rest[rest.index("--") + 1:] if "--" in rest else []
+    text = " ".join(tail) if tail else sys.stdin.read()
+    opts = rest[:rest.index("--")] if "--" in rest else rest
+
+    def opt(name: str) -> str | None:
+        return opts[opts.index(name) + 1] if name in opts and opts.index(name) + 1 < len(opts) else None
+
+    cls, what = "", text
+    if "--read" in rest:
+        i = rest.index("--read")
+        target = rest[i + 1] if i + 1 < len(rest) else ""
+        verdict, reason = cmdguard.check_read(target)
+        cls, what = "secret", f"read {target}"
+    elif write is not None:
+        verdict, reason = cmdguard.check_write(write, text)
+        cls = "tamper" if verdict == "deny" else "malware"
+        what = f"write {write}"
+    else:
+        verdict, reason, cls = cmdguard.check_detail(text)
+    # --ask deny|all: put what the guard would stop to the person (Approve/Deny
+    # pop-up) instead of deciding alone. deny = only refusals (the host asks
+    # about warnings itself); all = refusals and warnings.
+    ask = opt("--ask")
+    asked = approved = None
+    if ask in ("deny", "all") and (verdict == "deny" or (verdict == "warn" and ask == "all")):
+        from . import approve
+        agent_name = opt("--agent") or os.environ.get("VELOGUARD_AGENT") or "An AI agent"
+        approved, how = approve.ask(agent_name, what, reason, cls, opt("--cwd"))
+        asked = True
+        record({"control": "agent-approval", "agent": agent_name, "verdict": verdict,
+                "class": cls, "reason": reason, "what": what[:2000],
+                "result": "approved" if approved else "denied", "how": how})
+        if approved:
+            verdict, reason = "allow", f"approved by the person (it {reason})"
+        else:
+            verdict, reason = "deny", f"the person didn't approve it ({how}) — it {reason}"
+    if as_json:
+        out = {"verdict": verdict, "reason": reason, "class": cls if verdict != "allow" else ""}
+        if asked:
+            out.update({"asked": True, "approved": bool(approved)})
+        print(json.dumps(out))
+    elif verdict != "allow":
+        print(f"{verdict}: {reason}")
+    return {"allow": 0, "warn": 1}.get(verdict, 3)
+
+
+def _approve(rest: list[str]) -> int:
+    """guardd approve --agent NAME [--class C] [--reason R] [--cwd DIR] -- WHAT:
+    put something the guard restricts to the person (Approve/Deny pop-up).
+    Prints {"approved": bool, "how": ...}; exit 0 approved, 1 not."""
+    from . import approve
+    opts = rest[:rest.index("--")] if "--" in rest else rest
+    what = " ".join(rest[rest.index("--") + 1:]) if "--" in rest else sys.stdin.read()
+
+    def opt(name: str) -> str:
+        return opts[opts.index(name) + 1] if name in opts and opts.index(name) + 1 < len(opts) else ""
+
+    agent_name = opt("--agent") or os.environ.get("VELOGUARD_AGENT") or "An AI agent"
+    ok, how = approve.ask(agent_name, what, opt("--reason"), opt("--class"), opt("--cwd") or None)
+    record({"control": "agent-approval", "agent": agent_name, "class": opt("--class"),
+            "reason": opt("--reason"), "what": what[:2000],
+            "result": "approved" if ok else "denied", "how": how})
+    print(json.dumps({"approved": ok, "how": how}))
+    return 0 if ok else 1
+
+
+def _agents(rest: list[str]) -> int:
+    """guardd agents [list] | test <name> | json — the agent plugins."""
+    from . import agent_plugins
+    plugins = agent_plugins.load_all()
+    sub = rest[0] if rest else "list"
+    if sub in ("list", "json"):
+        rows = [agent_plugins.status(p) for p in plugins.values()]
+        if sub == "json":
+            print(json.dumps(rows))
+            return 0
+        active = state.active_provider(config_default=_configured_adapter())
+        for r in rows:
+            mark = "➤" if r["name"] == active else " "
+            st = "installed" if r["installed"] else "not installed"
+            if r["installed"] and not r["config"]:
+                st += " — sign in: " + r["signin"]
+            print(f"  {mark} {r['name']:<12} {r['label']:<14} {st}")
+        return 0
+    if sub == "test" and len(rest) == 2:
+        name = rest[1]
+        if name not in plugins:
+            print(f"no agent plugin {name!r} (have: {', '.join(plugins)})", file=sys.stderr)
+            return 2
+        cfg = state.adapter_config(name) if state.is_agent(name) else {}
+        try:
+            text = agent_plugins.run_brain(
+                name, "You are a connectivity check. Follow the instruction exactly.",
+                "Reply with exactly the word VELOGUARD-OK and nothing else.",
+                cfg.get("model"), timeout=120)
+        except RuntimeError as exc:
+            print(f"✗ {plugins[name].label}: {exc}")
+            return 1
+        ok = "VELOGUARD-OK" in text
+        print(("✓ " if ok else "✗ ") + f"{plugins[name].label} answered: {text[:200]!r}")
+        return 0 if ok else 1
+    if sub == "handoff" and len(rest) == 3:
+        try:
+            print(json.dumps(agent_plugins.handoff(rest[1], rest[2], sys.stdin.read())))
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        return 0
+    print("usage: guardd agents [list|json] | test <name> | handoff <name> error|incident  (text on stdin)",
+          file=sys.stderr)
+    return 2
+
 
 def _control(argv: list[str]) -> int:
     verb, rest = argv[0], argv[1:]
@@ -595,9 +907,53 @@ def _control(argv: list[str]) -> int:
             "claude": " (Anthropic API — needs a key)",
             "ollama": " (local model via Ollama — private, free)",
         }
-        for p in state.PROVIDERS:
-            print(f"  {p}{tags.get(p, '')}")
+        from . import agent_plugins
+        plugins = agent_plugins.load_all()
+        for p in state.providers():
+            tag = tags.get(p) or (f" ({plugins[p].label} — agent plugin)" if p in plugins else "")
+            print(f"  {p}{tag}")
         return 0
+
+    if verb == "agents":
+        return _agents(rest)
+
+    if verb == "check-command":
+        return _check_command(rest)
+
+    if verb == "approve":
+        return _approve(rest)
+
+    if verb == "watch":
+        from . import watch
+        return watch.status() if rest[:1] == ["status"] else watch.Watch().run()
+
+    if verb == "detonate":
+        from . import microvm
+        p = argparse.ArgumentParser(prog="guardd detonate")
+        p.add_argument("file")
+        p.add_argument("--seconds", type=int, default=30)
+        a = p.parse_args(rest)
+        print(f"detonating {a.file} in a Firecracker micro-VM (no network, {a.seconds} s)…", flush=True)
+        res = microvm.detonate(a.file, a.seconds)
+        print(microvm.as_text(res))
+        record({"control": "detonate", "file": a.file, "result": "ok" if res.get("ok") else "failed",
+                "exit": res.get("exit"), "error": res.get("error")})
+        return 0 if res.get("ok") else 1
+
+    if verb == "incidents":
+        return _incidents(rest)
+
+    if verb == "integrity":
+        return _integrity(rest)
+
+    if verb == "audit":
+        from . import audit as audit_mod
+        if rest[:1] == ["verify"]:
+            ok, msg = audit_mod.verify()
+            print(("✓ " if ok else "✗ ") + msg)
+            return 0 if ok else 1
+        print("usage: guardd audit verify", file=sys.stderr)
+        return 2
 
     if verb == "key":
         if len(rest) < 2 or rest[0] != "claude":
@@ -623,9 +979,9 @@ def _control(argv: list[str]) -> int:
             print("usage: guardd use <provider> [model]", file=sys.stderr)
             return 2
         provider = rest[0]
-        if provider not in state.PROVIDERS:
+        if provider not in state.providers():
             print(f"unknown provider {provider!r} "
-                  f"(choices: {', '.join(state.PROVIDERS)})", file=sys.stderr)
+                  f"(choices: {', '.join(state.providers())})", file=sys.stderr)
             return 2
         state.set_active(provider)
         msg = f"active AI plane → {provider}"
@@ -641,6 +997,16 @@ def _control(argv: list[str]) -> int:
         elif provider == "ollama":
             print(f"  ℹ using local Ollama at {state.host_for('ollama')} — "
                   "make sure `ollama serve` is running and the model is pulled")
+        elif state.is_agent(provider):
+            from . import agent_plugins
+            pl = agent_plugins.get(provider)
+            st = agent_plugins.status(pl)
+            if not st["installed"]:
+                print(f"  ⚠ {pl.label} is not installed — veloguard-agent install {provider}")
+            elif not st["config"]:
+                print(f"  ⚠ {pl.label} looks signed out — sign in once: {pl.signin}")
+            print(f"  ℹ {pl.label} answers as the brain in a throwaway sandbox; "
+                  "check it with: guardd agents test " + provider)
         record({"control": "use", "provider": provider,
                 "model": state.model_for(provider) if provider != "mock" else None,
                 "result": "ok"})
@@ -651,7 +1017,7 @@ def _control(argv: list[str]) -> int:
             print("usage: guardd model <provider> <model>", file=sys.stderr)
             return 2
         provider, model = rest[0], rest[1]
-        if provider not in state.PROVIDERS or provider == "mock":
+        if provider not in state.providers() or provider == "mock":
             print(f"cannot set a model for {provider!r}", file=sys.stderr)
             return 2
         state.set_model(provider, model)
@@ -664,8 +1030,10 @@ def _control(argv: list[str]) -> int:
         active = state.active_provider(config_default=_configured_adapter())
         print(f"active AI plane : {active}")
         print("providers:")
-        for p in state.PROVIDERS:
-            line = f"  {'➤' if p == active else ' '} {p:<6}"
+        from . import agent_plugins
+        plugins = agent_plugins.load_all()
+        for p in state.providers():
+            line = f"  {'➤' if p == active else ' '} {p:<11}"
             if p == "snn":
                 line += f" model={state.model_for('snn') or '(default path)'}  [model code pending]"
             elif p == "claude":
@@ -673,6 +1041,11 @@ def _control(argv: list[str]) -> int:
                 line += f" model={state.model_for('claude')}  ({have})"
             elif p == "ollama":
                 line += f" model={state.model_for('ollama')}  host={state.host_for('ollama')}"
+            elif p in plugins:
+                st = agent_plugins.status(plugins[p])
+                line += (f" {plugins[p].label}: "
+                         + ("installed" if st["installed"] else "not installed")
+                         + ("" if st["config"] or not st["installed"] else ", signed out?"))
             print(line)
         return 0
 
@@ -769,7 +1142,7 @@ def _run(argv: list[str]) -> int:
         return 2
 
     # 2. Control plane: judge it
-    engine = PolicyEngine.load(args.policy)
+    engine = PolicyEngine.shared(args.policy)
     decision = engine.evaluate(action)
     base = {"intent": args.intent, "provider": provider,
             "model": cfg.get("model"), "action": action.type.value,
@@ -789,8 +1162,15 @@ def _run(argv: list[str]) -> int:
             record({**base, "result": "aborted_by_user"})
             return 1
 
-    # 4. Kernel plane: do it
-    out = _execute(action, ex)
+    # 4. Kernel plane: do it. The executor self-protects (refuses a tunnel
+    #    with no endpoint, rolls back a dead one, refuses to run unsandboxed)
+    #    — audit those refusals like every other decision, no traceback.
+    try:
+        out = _execute(action, ex)
+    except (RuntimeError, ValueError) as e:
+        print(f"FAILED: {action.describe()} — {e}", file=sys.stderr)
+        record({**base, "result": "failed", "error": str(e)})
+        return 1
     engine.record(action)
     print(out)
     record({**base, "result": "executed", "output": out})

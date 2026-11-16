@@ -1,0 +1,431 @@
+#!/usr/bin/env python3
+"""veloguard-elevate-root — run ONE command as root after the desktop user
+clicks Approve. The root half of veloguard-elevate (what AI agents' `sudo`
+becomes): started through pkexec, which polkit lets an active local admin do
+without a password (49-veloguard-elevate.rules) — the user chose a click, not a
+password, so THIS program is the approval and has to be one the requesting
+agent can't answer for itself:
+
+  * the dialog runs as ROOT (the agent, running as the user, can't signal,
+    trace or reconfigure it) with a clean environment — no user GTK/CSS
+    config, so the command text can't be hidden or restyled;
+  * it reaches the screen over a Wayland connection this program opens and
+    verifies itself: the socket's peer must be the session's REAL compositor
+    (a known root-owned binary, running as the user, holding the input
+    devices logind hands only to the session controller). A fake or nested
+    compositor in the user's runtime dir — which the user's processes can
+    write — is refused, so an agent can't route the dialog somewhere it
+    answers. The verified socket is handed to the dialog (WAYLAND_SOCKET),
+    no path lookup in between;
+  * Deny is the default button, 120 s without an answer is a Deny, one dialog
+    at a time, and every request — approved or not — is in the audit log;
+  * defended by design (guardd/cmdguard.py, the rules the Claude Code plugin
+    applies too): a command that would switch off or rewrite the guard itself
+    — its services, firewall table, files, audit log — or one that malware
+    typically runs (a script piped from the internet, persistence, disk
+    wipes) is shown with the warning in red. The person decides; the guard
+    never decides for them (2026-11-15: "everything that can be restricted,
+    I should have the option to approve or deny").
+
+Residual risk (accepted with "no password"): any Wayland client may create a
+virtual keyboard/pointer, so a process watching the screen could click Approve.
+A password would close that; set it per machine by deleting the polkit rule.
+
+A TIME-LIMITED GRANT (`veloguard-elevate --grant 3h`): the person approves once
+that ONE running agent may run root commands without asking, for a while —
+to work while they're away. It is pinned to that agent's process (pid + start
+time, found among the requester's ancestors) — any other program, even one
+running as the same user, still gets the dialog — kept in /run (gone on
+reboot), at most 4 h, revocable (`--revoke`), and every command it covers is
+audited as "approved-by-grant". It lets the agent update VeloGuard's own files
+(maintenance); it never lets it switch the guard off (services, firewall
+table, audit log) unasked: those always get the dialog, grant or not.
+
+  veloguard-elevate-root --agent NAME --cwd DIR -- COMMAND [ARGS...]   (via pkexec)
+  veloguard-elevate-root --agent NAME --grant 3h | --revoke | --grant-status
+Exit: the command's own status; 1 = denied / no desktop to ask on; 2 = usage.
+"""
+from __future__ import annotations
+
+import fcntl
+import glob
+import html
+import json
+import os
+import pwd
+import re
+import shlex
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent          # /opt/veloguard
+COMPOSITORS = {
+    "/usr/bin/Hyprland", "/usr/bin/hyprland", "/usr/bin/niri",
+    "/usr/bin/gnome-shell", "/usr/bin/kwin_wayland", "/usr/bin/cosmic-comp",
+    "/usr/bin/sway", "/usr/bin/labwc", "/usr/bin/wayfire", "/usr/bin/river",
+}
+INPUT_DEV = re.compile(r"^/dev/input/event\d+$")
+MAX_SHOWN = 1500          # longer than this can't be read in a dialog → denied
+TIMEOUT = 120
+LOCK = "/run/veloguard-elevate.lock"
+GRANT = "/run/veloguard/elevate-grant.json"
+GRANT_STATUS = "/run/veloguard-grant.status"   # world-readable: expiry + agent name, for the bar
+MAX_GRANT = 4 * 3600
+SCRIPT_MAX = 256 * 1024
+INTERPRETERS = re.compile(r"^(ba|z|da|k)?sh$|^python3?(\.\d+)?$|^perl$|^env$")
+AGENT_RE = re.compile(r"^[A-Za-z0-9 ._+-]{1,40}$")
+
+
+def die(msg: str, code: int = 1) -> None:
+    print(f"veloguard-elevate: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def audit(entry: dict) -> None:
+    try:
+        sys.path.insert(0, str(HERE))
+        from guardd.audit import record
+        record({"control": "elevate", **entry})
+    except Exception as e:  # the decision stands even if the log can't be written
+        print(f"veloguard-elevate: audit log not written ({e})", file=sys.stderr)
+
+
+def parse(argv: list[str]) -> tuple[str, str, list[str]]:
+    agent, cwd = "a program", "/"
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--agent" and i + 1 < len(argv):
+            agent, i = argv[i + 1], i + 2
+        elif a == "--cwd" and i + 1 < len(argv):
+            cwd, i = argv[i + 1], i + 2
+        elif a == "--":
+            return agent, cwd, argv[i + 1:]
+        else:
+            break
+    die("usage: veloguard-elevate-root --agent NAME --cwd DIR -- COMMAND [ARGS...]", 2)
+    raise AssertionError
+
+
+def peer(sock: socket.socket) -> tuple[int, int]:
+    pid, uid, _ = struct.unpack("3i", sock.getsockopt(
+        socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+    return pid, uid
+
+
+def holds_input_devices(pid: int) -> bool:
+    for fd in glob.glob(f"/proc/{pid}/fd/*"):
+        try:
+            if INPUT_DEV.match(os.readlink(fd)):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def verified_compositor(uid: int) -> socket.socket | None:
+    """A connection to the user's real session compositor, or None."""
+    for path in sorted(glob.glob(f"/run/user/{uid}/wayland-*")):
+        if path.endswith(".lock"):
+            continue
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.connect(path)
+            pid, puid = peer(s)
+            exe = os.readlink(f"/proc/{pid}/exe")
+            if puid == uid and exe in COMPOSITORS and holds_input_devices(pid):
+                return s
+        except OSError:
+            pass
+        s.close()
+    return None
+
+
+def guard_verdict(cmd: list[str], cwd: str = "/") -> tuple[str, str, str]:
+    """(verdict, reason, class) for the command AND, when it runs a script
+    (`bash x.sh`, `python3 x.py`), for what the script says — zero trust: a
+    command line that only names a script hides nothing from the guard."""
+    try:
+        sys.path.insert(0, str(HERE))
+        from guardd import cmdguard
+        worst = cmdguard.check_detail(shlex.join(cmd))
+        rank = {"allow": 0, "warn": 1, "deny": 2}
+        for path in _scripts(cmd, cwd):
+            try:
+                with open(path, "rb") as f:
+                    body = f.read(SCRIPT_MAX + 1)
+            except OSError:
+                continue
+            if len(body) > SCRIPT_MAX:
+                return "warn", f"runs a script too large to check ({path})", "malware"
+            for line in body.decode(errors="replace").splitlines():
+                v = cmdguard.check_detail(line)
+                if rank[v[0]] > rank[worst[0]] or (v[0] == worst[0] == "deny" and v[2] == "disable"):
+                    worst = (v[0], f"{v[1]} (in {os.path.basename(path)})", v[2])
+        return worst
+    except Exception as e:          # the rules failing must not open the door
+        return "warn", f"the guard couldn't check this command ({e})", "malware"
+
+
+def _scripts(cmd: list[str], cwd: str) -> list[str]:
+    out, i = [], 0
+    while i < len(cmd) and INTERPRETERS.match(os.path.basename(cmd[i])):
+        i += 1
+        while i < len(cmd) and (cmd[i].startswith("-") or "=" in cmd[i]):
+            if cmd[i] in ("-c", "-e"):
+                return out                       # inline code: already in the command line
+            i += 1
+        if i < len(cmd):
+            p = cmd[i] if os.path.isabs(cmd[i]) else os.path.join(cwd, cmd[i])
+            if os.path.isfile(p):
+                out.append(p)
+                break
+    return out
+
+
+# --- the time-limited grant ----------------------------------------------------
+
+def _stat(pid: int) -> tuple[int, str, int] | None:
+    """(ppid, start time, uid) of a process, or None."""
+    try:
+        raw = open(f"/proc/{pid}/stat").read()
+        fields = raw[raw.rindex(")") + 2:].split()
+        uid = int(next(l.split()[1] for l in open(f"/proc/{pid}/status") if l.startswith("Uid:")))
+        return int(fields[1]), fields[19], uid
+    except (OSError, ValueError, StopIteration, IndexError):
+        return None
+
+
+def _is_agent(pid: int) -> bool:
+    try:
+        exe = os.readlink(f"/proc/{pid}/exe")
+        cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="replace")
+    except OSError:
+        return False
+    name = os.path.basename(exe)
+    return ("/.local/share/claude/versions/" in exe or name in ("claude", "codex", "codex-cli")
+            or (name.startswith(("node", "python")) and any(
+                k in cmd for k in ("kimi-code", "openclaw", "hermes", "@openai/codex"))))
+
+
+def _ancestors(pid: int):
+    seen = 0
+    while pid > 1 and seen < 64:
+        st = _stat(pid)
+        if st is None:
+            return
+        yield pid, st
+        pid, seen = st[0], seen + 1
+
+
+def agent_anchor(uid: int) -> dict | None:
+    """The nearest ancestor of this request that is an AI agent, run by `uid`."""
+    for pid, (ppid, start, puid) in _ancestors(os.getppid()):
+        if puid == uid and _is_agent(pid):
+            return {"pid": pid, "start": start, "exe": os.readlink(f"/proc/{pid}/exe")}
+    return None
+
+
+def load_grant(uid: int) -> dict | None:
+    try:
+        g = json.load(open(GRANT))
+    except (OSError, ValueError):
+        return None
+    if g.get("uid") != uid or time.time() > g.get("expires", 0):
+        if time.time() > g.get("expires", 0):
+            _clear_status()
+        return None
+    st = _stat(g["pid"])
+    if st is None or st[1] != g["start"]:
+        return None                                     # that agent is gone
+    if not any(p == g["pid"] for p, _ in _ancestors(os.getppid())):
+        return None                                     # not that agent's request
+    return g
+
+
+def _duration(s: str) -> int:
+    m = re.fullmatch(r"(\d+)\s*([hm]?)", s.strip().lower())
+    if not m:
+        die("--grant takes a duration like 3h or 90m", 2)
+    n = int(m.group(1)) * (3600 if m.group(2) in ("h", "") else 60)
+    return min(n, MAX_GRANT)
+
+
+def ask(conn: socket.socket, agent: str, cwd: str, shown: str, warning: str = "",
+        text: str | None = None) -> str:
+    """approved | denied | timeout — from a dialog only the user can answer."""
+    tmp = tempfile.mkdtemp(prefix="vg-elevate-")          # root's, 0700
+    os.makedirs(f"{tmp}/config", mode=0o700)
+    warn = (f"<span foreground='#e01b24'><b>⚠ VeloGuard: this {html.escape(warning)}.</b></span>\n\n"
+            if warning else "")
+    text = text or (f"<b>{html.escape(agent)}</b> wants to run a command as <b>root</b>:\n\n"
+            f"<tt>{html.escape(shown)}</tt>\n\n"
+            f"in <tt>{html.escape(cwd)}</tt>\n\n"
+            f"{warn}Approve only if you asked for this.")
+    fd = conn.fileno()
+    os.set_inheritable(fd, True)
+    env = {"WAYLAND_SOCKET": str(fd), "GDK_BACKEND": "wayland",
+           "XDG_RUNTIME_DIR": tmp, "HOME": tmp, "XDG_CONFIG_HOME": f"{tmp}/config",
+           "XDG_DATA_HOME": f"{tmp}/data", "XDG_CACHE_HOME": f"{tmp}/cache",
+           "GSETTINGS_BACKEND": "memory", "NO_AT_BRIDGE": "1", "GTK_A11Y": "none",
+           "PATH": "/usr/bin", "LANG": os.environ.get("LANG", "C.UTF-8")}
+    try:
+        r = subprocess.run(
+            ["zenity", "--question", "--title", "VeloGuard — root approval",
+             "--text", text, "--ok-label", "Approve", "--cancel-label", "Deny",
+             "--default-cancel", "--icon", "dialog-warning", "--width", "560",
+             "--timeout", str(TIMEOUT)],
+            env=env, pass_fds=(fd,), stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=TIMEOUT + 15)
+        code = r.returncode
+    except (OSError, subprocess.TimeoutExpired):
+        code = -1
+    finally:
+        subprocess.run(["rm", "-rf", "--", tmp], check=False)
+    return {0: "approved", 5: "timeout"}.get(code, "denied")
+
+
+def main() -> None:
+    if os.geteuid() != 0:
+        die("must be started through pkexec (veloguard-elevate)", 2)
+    try:
+        uid = int(os.environ["PKEXEC_UID"])
+        user = pwd.getpwuid(uid).pw_name
+    except (KeyError, ValueError):
+        die("must be started through pkexec (veloguard-elevate)", 2)
+    argv = sys.argv[1:]
+    if "--grant" in argv or "--revoke" in argv or "--grant-status" in argv:
+        return grant_cmd(argv, uid, user)
+    agent, cwd, cmd = parse(argv)
+    if not cmd:
+        die("no command given", 2)
+    if not AGENT_RE.match(agent):
+        agent = "a program"
+    cwd = os.path.realpath(cwd) if os.path.isdir(cwd) else "/"
+    shown = shlex.join(cmd)
+    entry = {"agent": agent, "user": user, "cwd": cwd, "argv": cmd}
+
+    lock = open(LOCK, "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)                     # one question at a time
+
+    verdict, why, cls = guard_verdict(cmd, cwd)
+    grant = load_grant(uid)
+    # What the guard would refuse goes to the person, with the reason in red;
+    # a grant covers maintenance of the guard's files, never switching it off.
+    must_ask = verdict == "deny" and not (grant and cls == "tamper")
+    if grant and not must_ask:
+        audit({**entry, "result": "approved-by-grant", "grant_expires": grant["expires"],
+               **({"note": why} if verdict != "allow" else {})})
+        lock.close()
+        return run_as_root(cmd, cwd, uid, user, agent, shown)
+    if len(shown) > MAX_SHOWN:
+        audit({**entry, "result": "denied", "why": "too long to show"})
+        die(f"denied: the command is too long to show for approval ({len(shown)} chars) — "
+            "put it in a script and run that")
+    conn = verified_compositor(uid)
+    if conn is None:
+        audit({**entry, "result": "denied", "why": "no verified desktop session"})
+        die("denied: no desktop session to ask you on (approval needs your screen) — "
+            "run the command yourself in a terminal")
+    if verdict == "deny":
+        why = (f"{why} — it switches off part of VeloGuard's own protection" if cls == "disable"
+               else f"{why} — it changes VeloGuard's own files")
+    answer = ask(conn, agent, cwd, shown, why if verdict in ("warn", "deny") else "")
+    conn.close()
+    audit({**entry, "result": answer, **({"warning": why} if verdict == "warn" else {})})
+    lock.close()
+    if answer != "approved":
+        die("denied by you" if answer == "denied" else "no answer in time — denied")
+
+    run_as_root(cmd, cwd, uid, user, agent, shown)
+
+
+def grant_cmd(argv: list[str], uid: int, user: str) -> None:
+    agent = argv[argv.index("--agent") + 1] if "--agent" in argv and argv.index("--agent") + 1 < len(argv) else "an AI agent"
+    agent = agent if AGENT_RE.match(agent) else "an AI agent"
+    if "--revoke" in argv:
+        try:
+            os.unlink(GRANT)
+            _clear_status()
+            audit({"agent": agent, "user": user, "result": "grant-revoked"})
+            print("grant revoked")
+        except FileNotFoundError:
+            print("no grant")
+        return
+    if "--grant-status" in argv:
+        try:
+            g = json.load(open(GRANT))
+            left = int(g["expires"] - time.time())
+            print(f"{g['agent']} (pid {g['pid']}): {max(left, 0) // 60} min left" if left > 0 else "expired")
+        except (OSError, ValueError, KeyError):
+            print("no grant")
+        return
+    secs = _duration(argv[argv.index("--grant") + 1] if argv.index("--grant") + 1 < len(argv) else "")
+    anchor = agent_anchor(uid)
+    if anchor is None:
+        die("a grant is for an AI agent's own session — run this from inside the agent", 2)
+    conn = verified_compositor(uid)
+    if conn is None:
+        die("denied: no desktop session to ask you on")
+    hours = f"{secs // 3600} h" + (f" {secs % 3600 // 60} min" if secs % 3600 else "") if secs >= 3600 else f"{secs // 60} min"
+    text = (f"<b>{html.escape(agent)}</b> (process {anchor['pid']}) asks to run root commands "
+            f"<b>without asking you</b> for the next <b>{hours}</b>, so it can work while you're away.\n\n"
+            "• Only this one running agent — any other program still gets this dialog.\n"
+            "• It may update VeloGuard's own files (maintenance).\n"
+            "• It still can't switch the guard off: its services, firewall and audit log stay refused.\n"
+            "• Every command is written to the audit log; ends on reboot or with "
+            "<tt>veloguard-elevate --revoke</tt>.\n\n"
+            "<span foreground='#e01b24'><b>Approve only if you asked for this.</b></span>")
+    answer = ask(conn, agent, "/", "", text=text)
+    conn.close()
+    audit({"agent": agent, "user": user, "result": f"grant-{answer}", "seconds": secs, "anchor": anchor})
+    if answer != "approved":
+        die("denied by you" if answer == "denied" else "no answer in time — denied")
+    os.makedirs(os.path.dirname(GRANT), mode=0o700, exist_ok=True)
+    fd = os.open(GRANT + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({**anchor, "uid": uid, "agent": agent, "expires": time.time() + secs,
+                   "scope": "maintenance"}, f)
+    os.replace(GRANT + ".tmp", GRANT)
+    _write_status(int(time.time() + secs), agent)
+    print(f"granted: {agent} may run root commands without asking for {hours}")
+
+
+def _write_status(expires: int, agent: str) -> None:
+    try:
+        fd = os.open(GRANT_STATUS + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        with os.fdopen(fd, "w") as f:
+            f.write(f"{expires} {agent}\n")
+        os.replace(GRANT_STATUS + ".tmp", GRANT_STATUS)
+    except OSError:
+        pass
+
+
+def _clear_status() -> None:
+    try:
+        os.unlink(GRANT_STATUS)
+    except OSError:
+        pass
+
+
+def run_as_root(cmd: list[str], cwd: str, uid: int, user: str, agent: str, shown: str) -> None:
+    pw = pwd.getpwuid(uid)
+    env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/bin", "HOME": "/root",
+           "LANG": os.environ.get("LANG", "C.UTF-8"), "TERM": os.environ.get("TERM", "dumb"),
+           "SUDO_USER": user, "SUDO_UID": str(uid), "SUDO_GID": str(pw.pw_gid),
+           "SUDO_COMMAND": shown[:MAX_SHOWN], "VELOGUARD_ELEVATED_FOR": agent}
+    os.chdir(cwd)
+    try:
+        os.execvpe(cmd[0], cmd, env)
+    except OSError as e:
+        die(f"{cmd[0]}: {e.strerror}", 127)
+
+
+if __name__ == "__main__":
+    main()

@@ -9,6 +9,10 @@ set -euo pipefail
 USER_MARKER="${VELOGUARD_USER_MARKER:-$HOME/.config/veloguard/.setup-done}"
 SYS_MARKER="${VELOGUARD_MARKER:-/var/lib/veloguard/.setup-done}"
 
+# Not on the live ISO: the live account is thrown away, and the wizard's
+# terminal opened over the desktop right where the installer appears.
+grep -q 'archisobasedir=' /proc/cmdline 2>/dev/null && exit 0
+
 # Already configured (per-user or system-wide) → nothing to do.
 [ -f "$USER_MARKER" ] && exit 0
 [ -f "$SYS_MARKER" ]  && exit 0

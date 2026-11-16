@@ -1,5 +1,6 @@
 # VeloGuardOS — packages appended to archiso 'releng' base (base/linux/syslinux/
-# networking/archinstall already come from releng). Keep it lean ("like Arch").
+# networking already come from releng; build.sh drops releng's archinstall —
+# Calamares is the installer). Keep it lean ("like Arch").
 
 # networking for the desktop
 networkmanager
@@ -18,15 +19,39 @@ mesa
 
 # VeloGuard security stack (kernel-side userspace the guard drives)
 nftables
+# compressed swap in RAM (/etc/systemd/zram-generator.conf)
+zram-generator
 wireguard-tools
 bubblewrap
 tor
+# veloguard watch: ClamAV scans every download (clamscan per batch, no daemon);
+# Firecracker runs suspicious samples in a no-network micro-VM (images built by
+# install-sandbox.sh --firecracker, which needs squashfs-tools)
+clamav
+firecracker
+squashfs-tools
+# Proton VPN's official app + CLI (Arch repos): sign in once in the app and
+# `veloguard-vpn connect proton` / auto-protect connect through it. NordVPN
+# (AUR, pinned) and Surfshark (Flathub) are added by the installer's
+# shellprocess@veloguardagents step (provision/install-vpn-apps.sh).
+proton-vpn-gtk-app
+proton-vpn-cli
+
+# AI agents as the guard's brain (agent plugins, desktop/agents/plugins): Codex
+# is in [extra]; the runtimes the others install with (npm for OpenClaw, uv for
+# Kimi Code) are on the disc so only the agents themselves need the network.
+openai-codex
+nodejs
+npm
+uv
 
 # universal package formats (default apps install via flatpak on first run)
 flatpak
 
-# Bulgarian Mode + media
-mpv
+# Media: VLC with every codec plugin (its FFmpeg also gives Bulgarian Mode
+# its ffplay player)
+vlc
+vlc-plugins-all
 ffmpeg
 
 # extra filesystem support
@@ -37,6 +62,7 @@ ntfs-3g
 # (releng usually carries these; explicit so the GUI installer can't regress)
 grub
 efibootmgr
+os-prober
 dosfstools
 
 # guard runtime
@@ -65,13 +91,12 @@ usb_modeswitch
 # GUI dialogs: the restart-update prompt + the VPN "Import config…" flow
 zenity
 
-# every distro should have git; base-devel + git = AUR works manually, and
-# build.sh also bakes in the 'yay' AUR helper from a local repo.
+# every distro should have git; base-devel + git = AUR works manually (no
+# helper is baked in — see build.sh step 2.5).
 git
 base-devel
 go
 
-# NOTE: Calamares (GUI installer) is staged in iso/airootfs/etc/calamares but not
-# installed yet — it isn't in Arch's repos and the Chaotic-AUR pull was flaky.
-# The live ISO uses archinstall for now; Calamares needs an AUR makepkg build.
+# Calamares (the installer) + ckbcomp come from the pinned local repo in
+# iso/pkgs (built once from AUR); build.sh adds them and fails without them.
 

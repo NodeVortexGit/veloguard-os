@@ -1,0 +1,6 @@
+{
+  "name": "veloguard",
+  "version": "0.2.0",
+  "description": "VeloGuardOS for Claude Code: the guard's MCP tools, its rules in every session, a guard check on every Bash/Edit/Write call, and /veloguard:diagnose, :investigate, :defend, :status.",
+  "author": { "name": "VeloGuardOS" }
+}

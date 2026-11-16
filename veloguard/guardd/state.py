@@ -26,7 +26,17 @@ from pathlib import Path
 
 # AI planes: offline keywords, the local SNN brain, and the opt-in pluggable
 # reasoning brains (Claude via API, Ollama locally).
-PROVIDERS = ("mock", "snn", "claude", "ollama")
+PROVIDERS = ("mock", "snn", "claude", "ollama")   # built in; agents come from plugins
+
+
+def providers() -> tuple[str, ...]:
+    """Built-in planes + every agent plugin (claude-code, codex, kimi, …)."""
+    from . import agent_plugins
+    return PROVIDERS + tuple(n for n in agent_plugins.load_all() if n not in PROVIDERS)
+
+
+def is_agent(provider: str) -> bool:
+    return provider not in PROVIDERS and provider in providers()
 DEFAULT_MODELS: dict[str, str] = {
     "claude": "claude-sonnet-5",
     "ollama": "llama3.1",
@@ -36,16 +46,23 @@ DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 
 
 def state_dir() -> Path:
-    """~/.config/veloguard (or $VELOGUARD_STATE). Created 0700 if missing."""
+    """~/.config/veloguard (or $VELOGUARD_STATE). The per-user default is kept 0700."""
     d = os.environ.get("VELOGUARD_STATE")
     base = Path(d) if d else (
         Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
         / "veloguard")
     base.mkdir(parents=True, exist_ok=True)
-    try:
-        base.chmod(0o700)
-    except OSError:
-        pass
+    # Only the per-user default is forced private (it holds credentials.json).
+    # An explicit $VELOGUARD_STATE such as the system /var/lib/veloguard keeps
+    # its own mode (0711): it carries world-readable mirrors (trusted-ssids,
+    # staged-kernel/pending.json) that the user-side menu, Waybar, power menu
+    # and VPN autoprotect read without a privileged call. Forcing 0700 here
+    # re-locked them out on every Wi-Fi trust change.
+    if not d:
+        try:
+            base.chmod(0o700)
+        except OSError:
+            pass
     return base
 
 
@@ -113,7 +130,7 @@ def active_provider(cli: str | None = None, config_default: str | None = None) -
 
 
 def model_for(provider: str) -> str | None:
-    env = os.environ.get(f"VELOGUARD_{provider.upper()}_MODEL")
+    env = os.environ.get(f"VELOGUARD_{provider.upper().replace('-', '_')}_MODEL")
     stored = _load(_state_file()).get("models", {}).get(provider)
     return env or stored or DEFAULT_MODELS.get(provider)
 
@@ -133,4 +150,8 @@ def adapter_config(provider: str) -> dict:
         return {"model": model_for("claude"), "api_key": get_key("claude")}
     if provider == "ollama":
         return {"model": model_for("ollama"), "host": host_for("ollama")}
+    if is_agent(provider):
+        # No stored model = the agent's own default (its config / sign-in).
+        return {"model": _load(_state_file()).get("models", {}).get(provider)
+                         or os.environ.get(f"VELOGUARD_{provider.upper().replace('-', '_')}_MODEL")}
     return {}

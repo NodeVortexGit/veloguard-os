@@ -1,9 +1,14 @@
 // LIVE ISO ONLY (removed from installed systems by calamares-target-cleanup):
 // let the live user start the installer without a password prompt — the live
-// account has none to type. Fixed program path, wheel + active + local.
+// account has none to type. Calamares ships its own pkexec action
+// (io.calamares.calamares.pkexec.run, exec.path=/usr/bin/calamares), and
+// pkexec reports THAT id, not the generic org.freedesktop.policykit.exec —
+// so the old generic-only match never fired and the live user got a password
+// dialog. Fixed program path, wheel + active + local.
 polkit.addRule(function (action, subject) {
-    if (action.id === "org.freedesktop.policykit.exec" &&
-        action.lookup("program") === "/usr/bin/calamares" &&
+    if ((action.id === "io.calamares.calamares.pkexec.run" ||
+         (action.id === "org.freedesktop.policykit.exec" &&
+          action.lookup("program") === "/usr/bin/calamares")) &&
         subject.active && subject.local && subject.isInGroup("wheel")) {
         return polkit.Result.YES;
     }

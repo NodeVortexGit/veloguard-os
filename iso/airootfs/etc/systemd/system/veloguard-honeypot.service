@@ -1,0 +1,37 @@
+[Unit]
+Description=VeloGuardOS honeypot — decoy SSH/Telnet/FTP/HTTP that catch, record and block whoever probes this machine
+Documentation=file:///opt/veloguard/README.md
+After=veloguard-firewall.service network-online.target
+Wants=veloguard-firewall.service
+
+[Service]
+Environment=VELOGUARD_STATE=/var/lib/veloguard
+Environment=PYTHONDONTWRITEBYTECODE=1
+# The decoys get a way in through the zero-trust firewall only while this runs
+ExecStartPre=/opt/veloguard/provision/veloguard-honeypot-net up
+ExecStart=/opt/veloguard/bin/veloguard honeypot --ports 2222,2323,2121,8080 --block --apply
+ExecStopPost=/opt/veloguard/provision/veloguard-honeypot-net down
+Restart=on-failure
+RestartSec=5
+# It talks to attackers: keep it boxed in
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/veloguard /var/log/veloguard -/run/veloguard
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE
+MemoryMax=256M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

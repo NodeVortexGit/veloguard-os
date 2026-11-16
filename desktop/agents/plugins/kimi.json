@@ -1,0 +1,49 @@
+{
+  "name": "kimi",
+  "label": "Kimi Code",
+  "vendor": "Moonshot AI",
+  "bin": "kimi",
+  "bin_paths": [
+    "~/.local/bin/kimi",
+    "~/.kimi-code/bin/kimi"
+  ],
+  "signin": "kimi login",
+  "home": {
+    "overlay": [
+      "~/.kimi-code"
+    ],
+    "files": [],
+    "ro": [
+      "~/.local/lib/node_modules/@moonshot-ai",
+      "~/.local/bin/kimi"
+    ]
+  },
+  "env": [
+    "KIMI_API_KEY",
+    "MOONSHOT_API_KEY"
+  ],
+  "brain": {
+    "_why": "-p runs one prompt and prints the answer; text output. Inside the throwaway sandbox like every brain.",
+    "argv": [
+      "kimi",
+      "--output-format",
+      "text"
+    ],
+    "model_flag": "--model",
+    "prompt": "arg",
+    "prompt_flag": "-p"
+  },
+  "launch": {
+    "argv": [
+      "kimi"
+    ],
+    "_why": "MCP, skill and the check are in ~/.kimi-code (veloguard-agent connect)"
+  },
+  "ask": {
+    "argv": [
+      "kimi"
+    ],
+    "prompt": "clipboard",
+    "_why": "Kimi Code has no first-message flag for an interactive session: the text goes to the clipboard to paste"
+  }
+}

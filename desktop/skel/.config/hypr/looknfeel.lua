@@ -1,0 +1,7 @@
+-- VeloGuardOS — your look'n'feel overrides (edit freely; these win over the defaults).
+-- See https://wiki.hypr.land/configuring/core/config-options/
+-- Examples:
+-- hl.config({
+--   general = { gaps_in = 0, gaps_out = 0, border_size = 0 },
+--   decoration = { rounding = 8 },
+-- })

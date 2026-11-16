@@ -1,93 +1,83 @@
-/* VeloGuardOS Waybar style — derived from Omarchy config/waybar/style.css (MIT).
-   Theme colors are imported from the active VeloGuard theme. Guard-status
-   classes are added. See desktop/omarchy/PROVENANCE.md. */
+/* VeloGuardOS Waybar — Frost: a translucent strip (Hyprland blurs behind it,
+   layer rule "frost-waybar"), colours from the active theme. */
 @import "../veloguard/current/waybar.css";
 
 * {
-  background-color: @background;
-  color: @foreground;
-
   border: none;
   border-radius: 0;
   min-height: 0;
-  font-family: 'JetBrainsMono Nerd Font';
-  font-size: 12px;
+  font-family: 'JetBrainsMono Nerd Font', 'Noto Sans CJK JP', sans-serif;
+  font-size: 12.5px;
 }
 
-.modules-left {
-  margin-left: 8px;
-}
-
-.modules-right {
-  margin-right: 8px;
-}
-
-#workspaces button {
-  all: initial;
-  padding: 0 6px;
-  margin: 0 1.5px;
-  min-width: 9px;
-}
-
-#workspaces button.empty {
-  opacity: 0.5;
-}
-
-#cpu,
-#battery,
-#pulseaudio,
-#custom-veloguard,
-#custom-guard {
-  min-width: 12px;
-  margin: 0 7.5px;
-}
-
-#custom-veloguard {
-  font-size: 14px;
-}
-
-#tray {
-  margin-right: 16px;
-}
-
-#bluetooth {
-  margin-right: 17px;
-}
-
-#network {
-  margin-right: 13px;
-}
-
-#custom-expand-icon {
-  margin-right: 18px;
+window#waybar {
+  background: @background;
+  color: @foreground;
+  border-bottom: 1px solid alpha(@accent, 0.45);
 }
 
 tooltip {
-  padding: 2px;
+  background: alpha(@solid, 0.92);
+  border: 1px solid @accent;
+  color: @foreground;
+}
+tooltip label { padding: 6px 8px; }
+
+.modules-left, .modules-right { margin: 0 6px; }
+
+#workspaces button {
+  all: initial;
+  padding: 0 7px;
+  color: @muted;
+}
+#workspaces button.active { color: @accent2; }
+#workspaces button.empty { opacity: 0.45; }
+#workspaces button:hover { color: @foreground; background: alpha(@accent, 0.25); }
+
+#window { color: @muted; padding: 0 10px; }
+#clock { font-weight: bold; padding: 0 12px; }
+
+#custom-veloguard { font-size: 15px; color: @accent2; padding: 0 10px 0 4px; }
+
+#custom-ai-usage, #custom-guard, #language, #network, #bluetooth, #pulseaudio,
+#backlight, #power-profiles-daemon, #battery, #tray, #custom-expand-icon, #custom-notifications, #custom-quickpanel {
+  padding: 0 9px;
 }
 
-#clock {
-  margin-left: 8.75px;
+#custom-ai-usage { color: @accent2; }
+#custom-ai-usage.high { color: @warn; }
+#custom-ai-usage.idle { color: @muted; }
+/* the subscription in use now, as its own favicon (veloguard-ai-usage sets the class) */
+#custom-ai-usage.claude-code, #custom-ai-usage.codex, #custom-ai-usage.kimi {
+  background-repeat: no-repeat;
+  background-size: 18px 18px;
+  background-position: 9px center;
+  padding-left: 33px;
+  color: @fg;
 }
+#custom-ai-usage.claude-code { background-image: url("/usr/share/veloguard/agents/icons/claude-code.png"); }
+#custom-ai-usage.codex       { background-image: url("/usr/share/veloguard/agents/icons/codex.png"); }
+#custom-ai-usage.kimi        { background-image: url("/usr/share/veloguard/agents/icons/kimi.png"); }
+#custom-ai-usage.high        { color: @warn; }
 
-.hidden {
-  opacity: 0;
+#custom-quickpanel {
+  font-size: 14px;
+  background: alpha(@accent, 0.35);
+  padding: 0 12px;
 }
+#custom-quickpanel:hover { background: alpha(@accent, 0.6); }
 
-/* ── Guard status colors ─────────────────────────────────────────────────
-   green  = VPN up / guard healthy
-   amber  = untrusted Wi-Fi with no VPN, or an update is staged
-   red    = guard down / alert */
-#custom-guard.vpn-up {
-  color: #00ff99;
-}
+#network.disconnected, #bluetooth.off, #bluetooth.disabled, #pulseaudio.muted { color: @muted; }
+#battery.warning { color: @warn; }
+#battery.critical:not(.charging) { color: @alert; }
+#power-profiles-daemon.performance { color: @warn; }
+#power-profiles-daemon.power-saver { color: @ok; }
 
-#custom-guard.untrusted,
-#custom-guard.update {
-  color: #ffcc33;
-}
+.hidden { opacity: 0; }
 
-#custom-guard.alert,
-#custom-guard.down {
-  color: #ff5555;
-}
+/* Guard status: green VPN up / healthy · amber untrusted Wi-Fi without VPN,
+   staged update · red alert · blue an active root grant (visible on purpose) */
+#custom-guard.vpn-up { color: @ok; }
+#custom-guard.untrusted, #custom-guard.update { color: @warn; }
+#custom-guard.alert { color: @alert; }
+#custom-guard.grant { color: #ffffff; background: alpha(@alert, 0.55); }

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# veloguard-wifi-menu — Wi-Fi from the bar: networks around you (signal,
+# security, which one you're on, whether VeloGuard trusts it), connect —
+# asking for the password if it's new —, Wi-Fi on/off, the full settings.
+set -uo pipefail
+menu() { wofi --dmenu --insensitive --width 460 --height 420 -p "$1"; }
+note() { notify-send -a VeloGuard -u low "Wi-Fi" "$1" 2>/dev/null || true; }
+TRUSTED=/var/lib/veloguard/trusted-ssids
+radio="$(nmcli -t radio wifi 2>/dev/null)"
+if [ "$radio" != enabled ]; then
+  case "$(printf '%s\n' "Turn Wi-Fi on" "Network settings…" | menu 'Wi-Fi is off')" in
+    "Turn Wi-Fi on") nmcli radio wifi on && note "Wi-Fi on" ;;
+    "Network settings…") exec alacritty -e nmtui ;;
+  esac; exit 0
+fi
+nmcli -t device wifi rescan >/dev/null 2>&1 &
+rows="$(nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID device wifi list 2>/dev/null | python3 -c '
+import sys
+seen, out = set(), []
+trusted = set()
+try: trusted = set(open("'"$TRUSTED"'").read().split("\n"))
+except OSError: pass
+for line in sys.stdin:
+    parts, cur, esc = [], "", False
+    for ch in line.rstrip("\n"):
+        if esc: cur += ch; esc = False
+        elif ch == "\\": esc = True
+        elif ch == ":": parts.append(cur); cur = ""
+        else: cur += ch
+    parts.append(cur)
+    if len(parts) < 4 or not parts[3] or parts[3] in seen: continue
+    seen.add(parts[3])
+    use, sig, sec, ssid = parts[0], int(parts[1] or 0), parts[2] or "open", parts[3]
+    bars = "󰤨" if sig > 75 else "󰤥" if sig > 50 else "󰤢" if sig > 25 else "󰤟"
+    lock = "" if sec not in ("", "--", "open") else "󰦞"
+    mark = "● " if use == "*" else "  "
+    tr = "  🛡 trusted" if ssid in trusted else ""
+    out.append(f"{mark}{bars} {lock}  {ssid}{tr}")
+print("\n".join(out))')"
+choice="$(printf '%s\n' "$rows" "󰖪  Turn Wi-Fi off" "  Network settings…" | menu 'Wi-Fi networks')" || exit 0
+case "$choice" in
+  *"Turn Wi-Fi off") nmcli radio wifi off && note "Wi-Fi off"; exit 0 ;;
+  *"Network settings…") exec alacritty -e nmtui ;;
+esac
+ssid="$(printf '%s' "$choice" | sed -E 's/^(● |  )[^ ]+ [^ ]*  //; s/  🛡 trusted$//')"
+[ -n "$ssid" ] || exit 0
+if nmcli -t -f NAME connection show | grep -Fxq -- "$ssid"; then
+  nmcli connection up id "$ssid" >/dev/null 2>&1 && note "Connected to $ssid" || note "Couldn't connect to $ssid"
+  exit 0
+fi
+pw=""
+if [[ $choice != *"󰦞"* ]]; then
+  pw="$(wofi --dmenu --password --width 420 --height 80 -p "Password for $ssid" </dev/null)" || exit 0
+fi
+if [ -n "$pw" ]; then out="$(nmcli device wifi connect "$ssid" password "$pw" 2>&1)"; else out="$(nmcli device wifi connect "$ssid" 2>&1)"; fi
+case "$out" in *successfully*) note "Connected to $ssid" ;; *) note "Couldn't connect to $ssid: ${out##*: }" ;; esac

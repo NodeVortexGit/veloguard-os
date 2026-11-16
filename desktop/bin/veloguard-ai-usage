@@ -1,0 +1,538 @@
+#!/usr/bin/env python3
+"""veloguard-ai-usage — how much every AI agent on this machine used today.
+
+Read from each agent's own local session logs (nothing leaves the machine):
+
+  Claude Code  ~/.claude/projects/**.jsonl     exact (per response, deduplicated)
+               + the current 5-hour block
+  Codex        ~/.codex/sessions/**.jsonl       exact (token_count events)
+               + its 5-hour / weekly rate-limit use, as Codex reports it
+  everything else that logs tokens — Kimi Code, Hermes, OpenClaw,
+  Antigravity, Gemini CLI, Mistral Vibe, opencode, Qwen Code, Goose, Amp,
+  Cursor agent, Copilot CLI, Factory Droid, Crush… — read generically from
+  their session files ("≈": token fields found in the logs)
+
+Plan usage — each subscription's own limits, the bars on hover:
+  Claude Code  session (5 h) + week   from VeloGuard's Claude Code plugin, which
+                                      saves what Claude Code reports (no token read)
+  Codex        5 h + week             what Codex reports with every turn (its logs)
+  Kimi Code    session + month        veloguard-kimi-usage asks Kimi Code's own local
+                                      server (loopback, every 5 min) → kimi.json
+
+  veloguard-ai-usage              # a table
+  veloguard-ai-usage --details    # the same, per agent with sessions
+  veloguard-ai-usage --waybar     # the bar module (JSON): the logo (CSS, by
+                                  # class) of the subscription in use now — the
+                                  # last one used; OpenClaw on Kimi counts as
+                                  # Kimi — and its session %
+  veloguard-ai-usage --plans      # plan usage as JSON (the quick panel)
+  veloguard-ai-usage --json
+"""
+from __future__ import annotations
+
+import datetime as dt
+import glob
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+MAX_AGE = 36 * 3600            # only files touched recently are read
+BLOCK = 5 * 3600
+
+GENERIC = [
+    ("kimi", "Kimi Code", ["~/.kimi-code/sessions/**/*.jsonl", "~/.kimi-code/sessions/**/*.json", "~/.kimi/sessions/**/*.jsonl"]),
+    ("hermes", "Hermes", ["~/.hermes/sessions/**/*.json*", "~/.hermes/logs/**/*.jsonl", "~/.hermes/usage*.jsonl"]),
+    ("openclaw", "OpenClaw", ["~/.openclaw/agents/*/sessions/**/*.jsonl", "~/.openclaw/sessions/**/*.jsonl"]),
+    ("antigravity", "Antigravity", ["~/.gemini/antigravity/**/*.json*", "~/.antigravity/**/*.jsonl", "~/.config/Antigravity/**/sessions/**/*.json*"]),
+    ("gemini", "Gemini CLI", ["~/.gemini/tmp/**/*.json*"]),
+    ("vibe", "Mistral Vibe", ["~/.vibe/**/*.json*", "~/.config/vibe/**/*.jsonl"]),
+    ("opencode", "opencode", ["~/.local/share/opencode/storage/message/**/*.json"]),
+    ("qwen", "Qwen Code", ["~/.qwen/tmp/**/*.json*"]),
+    ("goose", "Goose", ["~/.local/share/goose/sessions/**/*.jsonl"]),
+    ("amp", "Amp", ["~/.local/share/amp/**/*.json*", "~/.amp/**/*.jsonl"]),
+    ("cursor", "Cursor agent", ["~/.cursor/**/*.jsonl"]),
+    ("copilot", "Copilot CLI", ["~/.copilot/**/*.jsonl"]),
+    ("droid", "Factory Droid", ["~/.factory/sessions/**/*.jsonl"]),
+    ("crush", "Crush", ["~/.local/share/crush/**/*.jsonl"]),
+    ("aider", "Aider", ["~/.aider/**/*.jsonl"]),
+]
+IN_KEYS = ("input_tokens", "prompt_tokens", "inputTokens", "promptTokens", "promptTokenCount", "input")
+OUT_KEYS = ("output_tokens", "completion_tokens", "outputTokens", "completionTokens",
+            "candidatesTokenCount", "output", "reasoning_output_tokens", "reasoning", "thoughtsTokenCount")
+CACHE_KEYS = ("cache_read_input_tokens", "cache_creation_input_tokens", "cached_input_tokens",
+              "cachedContentTokenCount", "cache_read", "cache_write", "read", "write")
+
+
+def today_start() -> float:
+    d = dt.datetime.now().astimezone()
+    return d.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+def ts_of(obj: dict, fallback: float) -> float:
+    for k in ("timestamp", "created_at", "createdAt", "time", "ts", "date"):
+        v = obj.get(k)
+        if isinstance(v, (int, float)):
+            return v / 1000 if v > 1e12 else float(v)
+        if isinstance(v, str):
+            try:
+                return dt.datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+    return fallback
+
+
+def recent(patterns: list[str]) -> list[str]:
+    now, out = time.time(), set()
+    for pat in patterns:
+        for f in glob.glob(os.path.expanduser(pat), recursive=True):
+            try:
+                if os.path.isfile(f) and now - os.path.getmtime(f) < MAX_AGE:
+                    out.add(f)
+            except OSError:
+                continue
+    return sorted(out)
+
+
+def lines(f: str):
+    try:
+        with open(f, errors="replace") as fh:
+            if f.endswith(".jsonl"):
+                for line in fh:
+                    line = line.strip()
+                    if line.startswith("{"):
+                        try:
+                            yield json.loads(line)
+                        except ValueError:
+                            continue
+            else:
+                d = json.load(fh)
+                if isinstance(d, list):
+                    yield from (x for x in d if isinstance(x, dict))
+                elif isinstance(d, dict):
+                    yield d
+    except (OSError, ValueError):
+        return
+
+
+def blank(name, label, exact=True):
+    return {"name": name, "label": label, "exact": exact, "input": 0, "output": 0, "cache": 0,
+            "total": 0, "sessions": set(), "last": 0.0, "block": 0, "block_reset": None, "limits": None}
+
+
+# --- Claude Code -------------------------------------------------------------
+def claude() -> dict:
+    r = blank("claude-code", "Claude Code")
+    start, seen, events = today_start(), set(), []
+    for f in recent(["~/.claude/projects/**/*.jsonl", "~/.config/claude/projects/**/*.jsonl"]):
+        mtime = os.path.getmtime(f)
+        for o in lines(f):
+            m = o.get("message") if isinstance(o.get("message"), dict) else None
+            u = m.get("usage") if m else None
+            if not isinstance(u, dict):
+                continue
+            key = (m.get("id"), o.get("requestId"))
+            if key in seen:
+                continue
+            seen.add(key)
+            t = ts_of(o, mtime)
+            tot = sum(int(u.get(k) or 0) for k in ("input_tokens", "output_tokens",
+                                                  "cache_creation_input_tokens", "cache_read_input_tokens"))
+            events.append((t, tot))
+            if t >= start:
+                r["input"] += int(u.get("input_tokens") or 0)
+                r["output"] += int(u.get("output_tokens") or 0)
+                r["cache"] += int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
+                r["sessions"].add(o.get("sessionId") or f)
+                r["last"] = max(r["last"], t)
+    # the current 5-hour block (starts at the hour of its first message)
+    events.sort()
+    bstart = None
+    for t, _ in events:
+        if bstart is None or t >= bstart + BLOCK:
+            bstart = t - (t % 3600)
+    if bstart and time.time() < bstart + BLOCK:
+        r["block"] = sum(n for t, n in events if t >= bstart)
+        r["block_reset"] = bstart + BLOCK
+    return r
+
+
+# --- Codex ---------------------------------------------------------------------
+def codex() -> dict:
+    r = blank("codex", "Codex")
+    start, latest_limits = today_start(), (0.0, None)
+    for f in recent(["~/.codex/sessions/**/*.jsonl", "~/.codex/archived_sessions/**/*.jsonl"]):
+        mtime = os.path.getmtime(f)
+        for o in lines(f):
+            p = o.get("payload") if isinstance(o.get("payload"), dict) else {}
+            if p.get("type") != "token_count":
+                continue
+            t = ts_of(o, mtime)
+            info = p.get("info") or {}
+            last = info.get("last_token_usage") or {}
+            if t >= start and last:
+                r["input"] += int(last.get("input_tokens") or 0) - int(last.get("cached_input_tokens") or 0)
+                r["cache"] += int(last.get("cached_input_tokens") or 0)
+                r["output"] += int(last.get("output_tokens") or 0)
+                r["sessions"].add(f)
+                r["last"] = max(r["last"], t)
+            if p.get("rate_limits") and t >= latest_limits[0]:
+                latest_limits = (t, p["rate_limits"])
+    r["limits"] = latest_limits[1]
+    r["limits_ts"] = latest_limits[0]
+    return r
+
+
+# --- anything else that logs tokens -------------------------------------------
+def _walk_usage(o, acc, depth=0):
+    if depth > 6 or not isinstance(o, dict):
+        return
+    ins = next((o[k] for k in IN_KEYS if isinstance(o.get(k), (int, float))), None)
+    outs = [o[k] for k in OUT_KEYS if isinstance(o.get(k), (int, float))]
+    if ins is not None or outs:
+        acc["input"] += int(ins or 0)
+        acc["output"] += int(sum(outs))
+        acc["cache"] += int(sum(o[k] for k in CACHE_KEYS if isinstance(o.get(k), (int, float))))
+        cache = o.get("cache")
+        if isinstance(cache, dict):
+            acc["cache"] += int(sum(v for v in cache.values() if isinstance(v, (int, float))))
+        return
+    for k, v in o.items():
+        if k in ("usage", "tokens", "token_usage", "usageMetadata", "tokenUsage", "info", "message",
+                 "metadata", "response", "stats"):
+            _walk_usage(v, acc, depth + 1)
+
+
+def generic(name, label, patterns) -> dict:
+    r = blank(name, label, exact=False)
+    start, seen = today_start(), set()
+    for f in recent(patterns):
+        mtime = os.path.getmtime(f)
+        for o in lines(f):
+            ident = o.get("id") or o.get("message_id") or o.get("requestId")
+            if ident:
+                if (f, ident) in seen:
+                    continue
+                seen.add((f, ident))
+            if ts_of(o, mtime) < start:
+                continue
+            acc = {"input": 0, "output": 0, "cache": 0}
+            _walk_usage(o, acc)
+            if acc["input"] or acc["output"]:
+                for k in acc:
+                    r[k] += acc[k]
+                r["sessions"].add(f)
+                r["last"] = max(r["last"], ts_of(o, mtime))
+    return r
+
+
+def collect() -> list[dict]:
+    rows = [claude(), codex()] + [generic(*g) for g in GENERIC]
+    for r in rows:
+        r["total"] = r["input"] + r["output"] + r["cache"]
+        r["sessions"] = len(r["sessions"])
+    return [r for r in rows if r["total"] or r["name"] in ("claude-code", "codex")]
+
+
+# --- plan usage: each subscription's own windows ------------------------------
+CACHE = HOME / ".cache" / "veloguard" / "usage"
+
+
+def _iso(ts: str | None) -> float | None:
+    if not ts:
+        return None
+    try:
+        return dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _window(name: str, pct, resets: float | None, kind: str = "long") -> dict:
+    now = time.time()
+    if resets and resets < now:          # the window reset since the reading
+        pct, resets = 0.0, None
+    return {"name": name, "kind": kind, "percent": None if pct is None else round(float(pct), 1),
+            "resets": resets, "resets_text": when(resets)}
+
+
+# Each subscription as its own usage page shows it: its colour, its favicon,
+# its windows' names (Claude: "Current session" + "Weekly"; Codex: "5h limit"
+# + "Weekly limit"; Kimi Code: "Session" + "Monthly").
+ICON_DIR = "/usr/share/veloguard/agents/icons"
+BRAND = {"claude-code": "#d97757", "codex": "#e8e8ec", "kimi": "#1783ff"}
+
+
+def _plan(agent: str, label: str) -> dict:
+    return {"agent": agent, "label": label, "windows": [], "note": "",
+            "color": BRAND[agent], "icon": f"{ICON_DIR}/{agent}.png"}
+
+
+def plan_claude() -> dict:
+    out = _plan("claude-code", "Claude Code")
+    try:
+        d = json.loads((CACHE / "claude-code.json").read_text())
+        w = d.get("windows", {})
+        for key, name, kind in (("five_hour", "Current session", "session"), ("seven_day", "Weekly", "long")):
+            if key in w:
+                out["windows"].append(_window(name, w[key].get("percentUsed"), _iso(w[key].get("resetsAt")), kind))
+        out["updated"] = _iso(d.get("updated"))
+    except (OSError, ValueError, AttributeError):
+        pass
+    if not out["windows"]:
+        out["note"] = "no reading yet — use Claude Code once (its plugin saves the numbers)"
+    return out
+
+
+def plan_codex(cx: dict) -> dict:
+    out = _plan("codex", "Codex")
+    lim, ts = cx.get("limits"), cx.get("limits_ts") or 0
+    if isinstance(lim, dict):
+        for key in ("primary", "secondary"):
+            v = lim.get(key)
+            if not isinstance(v, dict) or v.get("used_percent") is None:
+                continue
+            wm = v.get("window_minutes") or 0
+            short = bool(wm) and wm <= 600
+            name = "5h limit" if short else ("Weekly limit" if wm >= 10000 else f"{wm // 60}h limit")
+            resets = v.get("resets_at")
+            if not isinstance(resets, (int, float)) and isinstance(v.get("resets_in_seconds"), (int, float)):
+                resets = ts + v["resets_in_seconds"]
+            out["windows"].append(_window(name, v["used_percent"], resets, "session" if short else "long"))
+        out["updated"] = ts
+    if not out["windows"]:
+        out["note"] = "no reading yet — Codex reports its limits after your first turn"
+    return out
+
+
+KIMI_EVERY, KIMI_SIGNED_OUT_EVERY = 5 * 60, 30 * 60
+
+
+def refresh_kimi(d: dict | None) -> None:
+    """Kimi's quota comes from its own local server (veloguard-kimi-usage) —
+    refresh in the background when the reading is stale; never block the bar."""
+    age = time.time() - (_iso((d or {}).get("updated")) or 0)
+    every = KIMI_SIGNED_OUT_EVERY if (d or {}).get("auth") else KIMI_EVERY
+    if age < every or not (shutil.which("kimi") or (HOME / ".local/bin/kimi").exists()):
+        return
+    exe = shutil.which("veloguard-kimi-usage") or str(Path(__file__).with_name("veloguard-kimi-usage"))
+    try:
+        subprocess.Popen([exe], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+
+
+def plan_kimi() -> dict:
+    out = _plan("kimi", "Kimi Code")
+    d = None
+    try:
+        d = json.loads((CACHE / "kimi.json").read_text())
+        u = {k: v for k, v in d.get("usages", {}).items() if isinstance(v, dict) and v.get("usedRatio") is not None}
+        # two bars, like Kimi Code's console: the session (5 h) and the month
+        # (the week when there's no monthly figure)
+        long_key = next((k for k in ("monthTotal", "monthCode", "limit7d") if k in u), None)
+        for key, name, kind in (("limit5h", "Session", "session"),
+                                (long_key, "Weekly" if long_key == "limit7d" else "Monthly", "long")):
+            if key in u:
+                out["windows"].append(_window(name, 100 * float(u[key]["usedRatio"]), _iso(u[key].get("resetAt")), kind))
+        out["updated"] = _iso(d.get("updated"))
+    except (OSError, ValueError, AttributeError):
+        pass
+    refresh_kimi(d if isinstance(d, dict) else None)
+    if not out["windows"]:
+        err = (d or {}).get("error") if isinstance(d, dict) else None
+        out["note"] = err or "reading Kimi Code's quota…"
+    return out
+
+
+def plans(rows: list[dict]) -> list[dict]:
+    cx = next((r for r in rows if r["name"] == "codex"), {})
+    ps = [plan_claude(), plan_codex(cx), plan_kimi()]
+    cur = current(rows, ps)
+    for p in ps:
+        p["current"] = p["agent"] == cur
+    return ps
+
+
+# --- which subscription is in use right now: the bar's icon -------------------
+PROCS = {"claude-code": ("claude",), "codex": ("codex",), "kimi": ("kimi", "kimi-code")}
+RECENT = 30 * 60
+
+
+def openclaw_plan() -> str | None:
+    """OpenClaw spends whichever subscription its default model is on — Kimi's
+    when that model is a Kimi / Moonshot one."""
+    try:
+        raw = (HOME / ".openclaw" / "openclaw.json").read_text().lower()
+    except OSError:
+        return None
+    return "kimi" if ("kimi" in raw or "moonshot" in raw) else None
+
+
+def running() -> set[str]:
+    names = set()
+    for d in glob.glob("/proc/[0-9]*/comm"):
+        try:
+            names.add(open(d).read().strip())
+        except OSError:
+            continue
+    return {a for a, ps in PROCS.items() if names & set(ps)} | (
+        {"kimi"} if "openclaw" in names and openclaw_plan() == "kimi" else set())
+
+
+def current(rows: list[dict], ps: list[dict]) -> str | None:
+    """The plan whose agent did something last (within half an hour); else the
+    one whose agent is open; else the one closest to its limit."""
+    last = {}
+    for r in rows:
+        a = r["name"] if r["name"] in BRAND else ("kimi" if r["name"] == "openclaw" and openclaw_plan() == "kimi" else None)
+        if a:
+            last[a] = max(last.get(a, 0.0), r.get("last") or 0.0)
+    for p in ps:
+        if p.get("updated"):
+            last[p["agent"]] = max(last.get(p["agent"], 0.0), float(p["updated"]))
+    now = time.time()
+    fresh = {a: t for a, t in last.items() if now - t < RECENT}
+    if fresh:
+        return max(fresh, key=fresh.get)
+    on = running()
+    if on:
+        return max(on, key=lambda a: last.get(a, 0.0))
+    best = [(w["percent"], p["agent"]) for p in ps for w in p["windows"] if w["percent"] is not None]
+    return max(best)[1] if best else None
+
+
+def session_pct(p: dict) -> float | None:
+    """The short window (Claude/Kimi "session", Codex "5 h"); else the first."""
+    ws = [w for w in p["windows"] if w["percent"] is not None]
+    short = [w for w in ws if w["kind"] == "session"]
+    return (short or ws or [{"percent": None}])[0]["percent"]
+
+
+BAR = 30
+
+
+def bar(pct: float | None, color: str = "#6b9bff", width: int = BAR) -> str:
+    if pct is None:
+        return "<span color='#3a4058'>" + "━" * width + "</span>"
+    filled = max(0, min(width, round(width * pct / 100)))
+    if pct >= 90:
+        color = "#f26d7d"                 # nearly out — red, whatever the brand
+    return f"<span color='{color}'>{'━' * filled}</span><span color='#3a4058'>{'━' * (width - filled)}</span>"
+
+
+def when(ts: float | None) -> str:
+    """ "Resets in 2 hr 14 min" within a day, else "Resets Fri 10:00". """
+    if not ts:
+        return ""
+    left = ts - time.time()
+    if left <= 0:
+        return "Resets now"
+    if left < 86400:
+        h, m = int(left // 3600), int(left % 3600 // 60)
+        return "Resets in " + (f"{h} hr {m} min" if h else f"{max(m, 1)} min")
+    return "Resets " + dt.datetime.fromtimestamp(ts).strftime("%a %H:%M")
+
+
+GLYPH = {"claude-code": "\u273b", "codex": "\U000f02d9", "kimi": "\U000f0594"}
+
+
+def plans_tooltip(ps: list[dict]) -> list[str]:
+    out = []
+    for p in ps:
+        now = "  <span color='#6a7290'>· now</span>" if p.get("current") else ""
+        out.append(f"<span size='large'><span color='{p['color']}'>{GLYPH[p['agent']]}</span> <b>{p['label']}</b></span>{now}")
+        if not p["windows"]:
+            out.append(f"<span color='#6a7290'>{p['note']}</span>")
+        for w in p["windows"]:
+            pct = "?" if w["percent"] is None else f"{w['percent']:.0f}% used"
+            out.append(f"{w['name']:<{BAR - len(pct)}}{pct}")
+            out.append(f"<span size='large'>{bar(w['percent'], p['color'])}</span>")
+            out.append(f"<span color='#8a93b0'>{w['resets_text']}</span>")
+        out.append("")
+    return out[:-1]
+
+
+def human(n: int) -> str:
+    for unit, div in (("B", 1e9), ("M", 1e6), ("k", 1e3)):
+        if n >= div:
+            return f"{n / div:.1f}{unit}".replace(".0", "")
+    return str(n)
+
+
+def limits_text(lim) -> str:
+    if not isinstance(lim, dict):
+        return ""
+    parts = []
+    for k, label in (("primary", "5h"), ("secondary", "week")):
+        v = lim.get(k)
+        if isinstance(v, dict) and v.get("used_percent") is not None:
+            wm = v.get("window_minutes")
+            label = "5h" if wm == 300 else ("week" if wm and wm >= 10000 else label)
+            parts.append(f"{label} {v['used_percent']:.0f}%")
+    return " · ".join(parts)
+
+
+def main() -> int:
+    rows = collect()
+    total = sum(r["total"] for r in rows)
+    ps = plans(rows)
+    if "--plans" in sys.argv:
+        print(json.dumps(ps))
+        return 0
+    if "--json" in sys.argv:
+        print(json.dumps(rows, default=str))
+        return 0
+    if "--waybar" in sys.argv:
+        lines_ = []
+        for r in sorted(rows, key=lambda x: -x["total"]):
+            mark = "" if r["exact"] else "≈"
+            line = f"{r['label']:<13} {mark}{human(r['total']):>7}  ({human(r['input'])} in · {human(r['output'])} out · {human(r['cache'])} cache)"
+            extra = []
+            if r["block"]:
+                reset = time.strftime("%H:%M", time.localtime(r["block_reset"]))
+                extra.append(f"5h block {human(r['block'])}, resets {reset}")
+            if limits_text(r["limits"]):
+                extra.append(f"limits {limits_text(r['limits'])}")
+            if extra:
+                line += "\n              " + " · ".join(extra)
+            lines_.append(line)
+        pcts = [w["percent"] for p in ps for w in p["windows"] if w["percent"] is not None]
+        session = [w["percent"] for p in ps for w in p["windows"]
+                   if w["percent"] is not None and w["kind"] == "session"]
+        hot = any(x >= 85 for x in pcts)
+        tip = ("<tt>" + "\n".join(plans_tooltip(ps))
+               + "</tt>\n\n<b>Tokens today</b> (from each agent's logs)\n<tt>"
+               + ("\n".join(lines_) if lines_ else "nothing yet")
+               + "</tt>\n\nClick: the quick panel's usage view · right-click: open your agent")
+        cur = next((p for p in ps if p.get("current")), None)
+        if cur:
+            pct = session_pct(cur)
+            text = f"{pct:.0f}%" if pct is not None else "–"     # the logo is the module's CSS
+        else:
+            text = f"󰚩 {max(session):.0f}%" if session else (f"󰚩 {human(total)}" if total else "󰚩")
+        state = "high" if hot else ("active" if (pcts or total) else "idle")
+        print(json.dumps({"text": text, "tooltip": tip,
+                          "class": [state] + ([cur["agent"]] if cur else [])}))
+        return 0
+    print(f"AI usage today — {human(total)} tokens across {sum(1 for r in rows if r['total'])} agent(s)\n")
+    print(f"  {'agent':<14}{'total':>9}{'input':>9}{'output':>9}{'cache':>9}  sessions")
+    for r in sorted(rows, key=lambda x: -x["total"]):
+        mark = " " if r["exact"] else "≈"
+        print(f"  {r['label']:<13}{mark}{human(r['total']):>9}{human(r['input']):>9}{human(r['output']):>9}"
+              f"{human(r['cache']):>9}  {r['sessions']}")
+        if "--details" in sys.argv:
+            if r["block"]:
+                print(f"      current 5h block: {human(r['block'])}, resets {time.strftime('%H:%M', time.localtime(r['block_reset']))}")
+            if limits_text(r["limits"]):
+                print(f"      rate limits (as {r['label']} reports): {limits_text(r['limits'])}")
+    print("\n  ≈ read generically from that agent's logs; exact counts for Claude Code and Codex.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

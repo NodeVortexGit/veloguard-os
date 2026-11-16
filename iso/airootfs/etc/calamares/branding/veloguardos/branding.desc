@@ -1,11 +1,19 @@
 ---
 componentName: veloguardos
 
-welcomeStyleCalamares: true
+# (the welcome page is our own welcomeq.qml — "Welcome to VeloGuardOS")
+welcomeStyleCalamares: false
 welcomeExpandingLogo: true
 windowExpanding: normal
-windowSize: 820px,560px
+# Room for the Desktop page's list + preview side by side.
+windowSize: 980px,660px
 windowPlacement: center
+
+# The navigation bar is QML (calamares-navigation.qml, themed): it can keep Next
+# disabled while the Desktop page's SSH-link field is invalid — notesqml pages
+# have no way to do that themselves. The sidebar stays the widget one.
+sidebar: widget
+navigation: qml
 
 strings:
     productName:         VeloGuardOS
@@ -15,20 +23,28 @@ strings:
     versionedName:       VeloGuardOS 0.1.0
     shortVersionedName:  VeloGuardOS
     bootloaderEntryName:  VeloGuardOS
-    productUrl:          https://github.com/IVELINYTBG1/veloguard-os
-    supportUrl:          https://github.com/IVELINYTBG1/veloguard-os
-    releaseNotesUrl:     https://github.com/IVELINYTBG1/veloguard-os
+    productUrl:          https://github.com/NodeVortexGit/veloguard-os
+    supportUrl:          https://github.com/NodeVortexGit/veloguard-os
+    releaseNotesUrl:     https://github.com/NodeVortexGit/veloguard-os
 
+# productLogo/productIcon are drawn SQUARE (the sidebar logo at 80×80): a
+# square crop of the shield, so it isn't squashed; the wide artwork is the
+# welcome page's picture. Both generated from the wallpaper by iso/build.sh.
 images:
-    productLogo:         "veloguard-logo.png"
-    productIcon:         "veloguard-logo.png"
+    productLogo:         "veloguard-icon.png"
+    productIcon:         "veloguard-icon.png"
     productWelcome:      "veloguard-logo.png"
 
 slideshow:               "show.qml"
 
-# Blue-shield theme
+slideshowAPI: 1
+
+# The default VeloGuard theme (desktop/themes/veloguard). Calamares 3.4 reads
+# exactly these four keys — the old sidebarTextSelect/sidebarTextHighlight
+# spellings were silently ignored, so the sidebar never had these colours.
+# The rest of the window: stylesheet.qss; the QML pages: theme.js.
 style:
-    sidebarBackground:    "#13203a"
-    sidebarText:          "#e8eef7"
-    sidebarTextSelect:    "#17a2b8"
-    sidebarTextHighlight: "#1f7fbf"
+    SidebarBackground:        "#0d1729"
+    SidebarText:              "#e6edf7"
+    SidebarTextCurrent:       "#0d1729"
+    SidebarBackgroundCurrent: "#33ccff"

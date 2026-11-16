@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# veloguard-switch-layout — next keyboard layout (us → bg phonetic → jp, from
+# Clean Config); Japanese input (fcitx5 + Mozc) is on only for jp. Super+Space.
+hyprctl switchxkblayout all next >/dev/null
+sleep 0.1
+km="$(hyprctl -j devices | python3 -c 'import json,sys; k=json.load(sys.stdin)["keyboards"]; print((next((x for x in k if x["main"]), k[0]))["active_keymap"])' 2>/dev/null)"
+if [[ $km == *apanese* ]]; then fcitx5-remote -o 2>/dev/null; else fcitx5-remote -c 2>/dev/null; fi
+notify-send -a VeloGuard -u low -t 1200 -h string:x-canonical-private-synchronous:layout "Keyboard" "${km:-?}" 2>/dev/null || true

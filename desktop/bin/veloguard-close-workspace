@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# veloguard-close-workspace — close every window on the current workspace
+# (Super+Q, from Clean Config). Closes politely (apps can still ask to save).
+set -euo pipefail
+ws="$(hyprctl activeworkspace -j | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')"
+hyprctl clients -j | python3 -c "
+import sys, json
+for c in json.load(sys.stdin):
+    if c.get('workspace', {}).get('id') == $ws:
+        print(c['address'])
+" | while read -r addr; do
+  [ -n "$addr" ] && hyprctl dispatch closewindow "address:$addr" >/dev/null
+done

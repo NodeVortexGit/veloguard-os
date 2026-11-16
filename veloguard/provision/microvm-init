@@ -1,0 +1,34 @@
+#!/bin/sh
+# /vg-init — PID 1 inside VeloGuard's detonation micro-VM (baked into the
+# guest rootfs by install-sandbox.sh --firecracker). Root filesystem read-only,
+# scratch in RAM, no network device. Runs /dev/vdb's sample for vg.seconds and
+# prints what happened between markers that guardd/microvm.py parses.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sys /sys 2>/dev/null
+mount -t devtmpfs dev /dev 2>/dev/null
+for d in /tmp /root /var/tmp /run /home; do mount -t tmpfs -o size=192m tmpfs "$d" 2>/dev/null; done
+# the root is read-only: the sample's disk mounts on a RAM directory
+mkdir -p /run/vg-s /tmp/vg
+mount -o ro /dev/vdb /run/vg-s 2>/dev/null || echo "VG-NOTE sample disk did not mount"
+secs=$(sed -n 's/.*vg\.seconds=\([0-9][0-9]*\).*/\1/p' /proc/cmdline)
+[ -n "$secs" ] || secs=30
+cp /run/vg-s/sample /run/vg-s/run.sh /tmp/vg/ 2>/dev/null
+chmod 755 /tmp/vg/sample /tmp/vg/run.sh 2>/dev/null
+touch /tmp/.vg-marker
+sleep 1
+echo "VG-BEGIN"
+timeout -s KILL "$secs" /bin/sh /tmp/vg/run.sh </dev/null >/tmp/.vg-out 2>&1
+rc=$?
+head -c 65536 /tmp/.vg-out
+echo
+echo "VG-END exit=$rc"
+echo "VG-NEWFILES"
+find /tmp /root /var/tmp /run /home -newer /tmp/.vg-marker \( -type f -o -type l \) 2>/dev/null \
+  | grep -v -e '^/tmp/vg/' -e '^/tmp/.vg-out$' -e '^/run/vg-s/' | head -100
+echo "VG-PROCS"
+ps -eo pid,ppid,comm,args --no-headers 2>/dev/null \
+  | grep -v -e ' \[' -e 'vg-init' -e ' ps -eo' -e ' head -60' -e 'bpfilter_umh' -e ' grep -v' | head -60
+echo "VG-DONE"
+sync
+reboot -f

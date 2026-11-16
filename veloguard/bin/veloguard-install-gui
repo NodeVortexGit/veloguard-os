@@ -1,10 +1,70 @@
 #!/usr/bin/env bash
 #
-# veloguard-install-gui — launch the graphical installer (Calamares), with an
-# honest fallback message if this image was built without it.
-if command -v calamares >/dev/null 2>&1; then
-    exec pkexec calamares
+# veloguard-install-gui — start the installer (Calamares) from the live session.
+#
+# Calamares runs as root. pkexec sanitises the environment down to DISPLAY/
+# XAUTHORITY, so a pkexec'd Calamares had no WAYLAND_DISPLAY/XDG_RUNTIME_DIR
+# and could only appear through XWayland, if root was let onto it at all. The
+# live account has passwordless sudo (live image only), so hand the session's
+# display variables over explicitly; pkexec stays the fallback.
+#
+# QT_QUICK_BACKEND=software: the installer's QML pages (Desktop page,
+# slideshow) render through Qt Quick, whose GL path SEGFAULTS the whole
+# installer when EGL can't initialise for the root process — seen on QEMU
+# without virgl ("egl: failed to create dri2 screen", then SIGSEGV right after
+# the welcome page). Software rendering is plenty for these pages and works on
+# every GPU and every VM.
+if ! command -v calamares >/dev/null 2>&1; then
+  msg="The installer (Calamares) is missing from this image — it was built without iso/pkgs."
+  notify-send "VeloGuardOS installer" "$msg" 2>/dev/null || echo "$msg" >&2
+  exit 1
 fi
-msg="The graphical installer isn't in this image — use the terminal installer: sudo archinstall"
-notify-send "VeloGuardOS installer" "$msg" 2>/dev/null || echo "$msg" >&2
-exit 1
+# Where the system image is: on the boot medium, or in RAM when archiso copied
+# it there and unmounted the medium (copytoram=auto: USB boot with enough
+# RAM). Calamares' unpackfs has one fixed path and runs AFTER partitioning —
+# a wrong path would wipe the disk and then fail. Fix the path up front, and
+# refuse to start the installer when the image can't be found at all.
+SFS=""
+for p in /run/archiso/bootmnt/arch/x86_64/airootfs.sfs /run/archiso/copytoram/airootfs.sfs; do
+  [ -f "$p" ] && { SFS="$p"; break; }
+done
+if [ -z "$SFS" ]; then
+  msg="Can't find the system image (airootfs.sfs) on the boot medium or in RAM — not starting the installer. Was the USB stick removed?"
+  notify-send -u critical "VeloGuardOS installer" "$msg" 2>/dev/null; echo "$msg" >&2
+  exit 1
+fi
+UNPACK=/etc/calamares/modules/unpackfs.conf
+if ! grep -qF "source: $SFS" "$UNPACK" 2>/dev/null; then
+  sudo -n sed -i "s|^\\([[:space:]]*- source:\\).*airootfs\\.sfs.*|\\1 $SFS|" "$UNPACK" 2>/dev/null \
+    || pkexec sed -i "s|^\\([[:space:]]*- source:\\).*airootfs\\.sfs.*|\\1 $SFS|" "$UNPACK"
+  grep -qF "source: $SFS" "$UNPACK" || { echo "could not point the installer at $SFS" >&2; exit 1; }
+fi
+
+# A failed installer run can leave helpers alive inside the old target (seen:
+# pacman's gpg-agent after a step timed out). Calamares unmounts lazily, so
+# such a process keeps the target partition busy and the NEXT run dies with
+# "failed to create a partition table". On the live system, any process whose
+# root is not the live root is such a leftover: stop them before starting.
+if sudo -n true 2>/dev/null; then
+  sudo -n /bin/sh -c '
+    live=$(stat -L -c %d /proc/1/root) || exit 0
+    for p in /proc/[0-9]*; do
+      d=$(stat -L -c %d "$p/root" 2>/dev/null) || continue
+      [ "$d" = "$live" ] || kill -9 "${p#/proc/}" 2>/dev/null
+    done
+    for m in /tmp/calamares-root-*; do
+      [ -d "$m" ] && { umount -R "$m" 2>/dev/null; rmdir "$m" 2>/dev/null; }
+    done
+    exit 0'
+fi
+
+if sudo -n true 2>/dev/null; then
+  # -u SUDO_*: sudo would otherwise hand SUDO_USER=veloguard (the live
+  # account) to every install step, and the target has no such user.
+  exec sudo -n /usr/bin/env -u SUDO_USER -u SUDO_UID -u SUDO_GID -u SUDO_COMMAND \
+    WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
+    DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-}" \
+    QT_QPA_PLATFORM="${WAYLAND_DISPLAY:+wayland;}xcb" QT_QUICK_BACKEND=software \
+    LANG="${LANG:-C.UTF-8}" /usr/bin/calamares "$@"
+fi
+exec pkexec /usr/bin/calamares "$@"

@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""veloguard-kimi-usage — Kimi Code's plan usage, for the bar and the quick panel.
+
+Kimi Code reports its quota (the 5-hour session, the week, the month) only
+through its own local server. So, at most every few minutes (veloguard-ai-usage
+asks), this:
+
+  1. starts `kimi web --no-open` on a free port on 127.0.0.1 (this machine
+     only; never --host, never --dangerous-bypass-auth),
+  2. takes the bearer token from that server's own startup output — the token
+     of the server we just started, nothing else is read,
+  3. asks it GET /api/v1/oauth/usage,
+  4. stops the server and writes ~/.cache/veloguard/usage/kimi.json (0600):
+       {"updated": ISO, "usages": {...}}    or    {"updated": ISO, "error": "..."}
+
+The person approved this (2026-11-15). Nothing leaves the machine except what
+Kimi Code itself sends to Kimi to answer the usage question.
+
+  veloguard-kimi-usage            # refresh now (one at a time — a lock)
+  veloguard-kimi-usage --print    # and print the result
+"""
+from __future__ import annotations
+
+import datetime as dt
+import fcntl
+import json
+import os
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+from pathlib import Path
+
+CACHE = Path.home() / ".cache" / "veloguard" / "usage"
+OUT = CACHE / "kimi.json"
+TOKEN_LINE = re.compile(r"^\s*Token:\s+(\S+)", re.M)
+
+
+def free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def find_usages(o, depth=0):
+    """The quota table, wherever this Kimi version nests it ({limit5h: {usedRatio,
+    resetAt}, …})."""
+    if depth > 6:
+        return None
+    if isinstance(o, dict):
+        u = o.get("usages")
+        if isinstance(u, dict) and u:
+            return u
+        for v in o.values():
+            r = find_usages(v, depth + 1)
+            if r:
+                return r
+    elif isinstance(o, list):
+        for v in o:
+            r = find_usages(v, depth + 1)
+            if r:
+                return r
+    return None
+
+
+def write(doc: dict) -> None:
+    CACHE.mkdir(parents=True, exist_ok=True)
+    doc["updated"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    fd, tmp = tempfile.mkstemp(dir=CACHE, prefix=".kimi.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(doc, f)
+        f.write("\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, OUT)
+
+
+def fetch() -> dict:
+    kimi = shutil.which("kimi") or str(Path.home() / ".local/bin/kimi")
+    if not os.access(kimi, os.X_OK):
+        return {"error": "Kimi Code isn't installed"}
+    port = free_port()
+    work = tempfile.mkdtemp(prefix="veloguard-kimi-")      # the server's workspace: empty
+    log = open(os.path.join(work, "server.out"), "w+")
+    proc = subprocess.Popen([kimi, "web", "--no-open", "--port", str(port)],
+                            cwd=work, stdout=log, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        token = None
+        for _ in range(60):                                  # up to ~15 s to start
+            time.sleep(0.25)
+            log.seek(0)
+            m = TOKEN_LINE.search(log.read())
+            if m:
+                token = m.group(1)
+                break
+            if proc.poll() is not None:
+                break
+        if not token:
+            return {"error": "Kimi Code's local server didn't start"}
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/v1/oauth/usage",
+                                     headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            body = json.load(r)
+        data = body.get("data") if isinstance(body, dict) else None
+        if isinstance(data, dict) and data.get("kind") == "error":
+            msg = str(data.get("message") or "error")
+            if "login" in msg.lower() or "token" in msg.lower():
+                return {"error": "not signed in — run: kimi login", "auth": True}
+            return {"error": msg[:200]}
+        usages = find_usages(data)
+        if not usages:
+            return {"error": "Kimi Code returned no quota"}
+        keep = {k: {"usedRatio": v.get("usedRatio"), "resetAt": v.get("resetAt")}
+                for k, v in usages.items() if isinstance(v, dict)}
+        return {"usages": keep}
+    except (OSError, ValueError) as e:
+        return {"error": f"couldn't ask Kimi Code ({type(e).__name__})"}
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+            proc.wait(timeout=5)
+        except (ProcessLookupError, subprocess.TimeoutExpired, OSError):
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        log.close()
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def main() -> int:
+    CACHE.mkdir(parents=True, exist_ok=True)
+    with open(CACHE / ".kimi.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0                                         # another refresh is running
+        doc = fetch()
+        write(doc)
+    if "--print" in sys.argv:
+        print(json.dumps(json.loads(OUT.read_text()), indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# veloguard-firewall start|stop|status — the zero-trust baseline
+# (/etc/veloguard/firewall.nft) and the guard's own blocklist table, which
+# block_ip / unblock_ip write into (created here so it exists from boot, not
+# only once someone ran the setup wizard).
+set -euo pipefail
+BASE=/etc/veloguard/firewall.nft
+PORTS=/etc/veloguard/open-ports
+case "${1:-start}" in
+  start|reload)
+    nft -f "$BASE"
+    if [ -r "$PORTS" ]; then
+      while read -r proto port _; do
+        case "$proto" in tcp|udp) ;; *) continue ;; esac
+        [[ $port =~ ^[0-9]{1,5}(-[0-9]{1,5})?$ ]] || continue
+        nft add element inet veloguard_base "open_$proto" "{ $port }"
+      done < <(grep -vE '^\s*(#|$)' "$PORTS")
+    fi
+    # The guard's blocklist (same definition as NftExecutor.setup); kept if
+    # it's already there — it holds the IPs the guard blocked.
+    if ! nft list table inet veloguard >/dev/null 2>&1; then
+      nft -f - <<'NFT'
+table inet veloguard {
+  set blocklist { type ipv4_addr; flags interval; }
+  set blocklist6 { type ipv6_addr; flags interval; }
+  chain input {
+    type filter hook input priority -100; policy accept;
+    ip saddr @blocklist drop
+    ip6 saddr @blocklist6 drop
+  }
+}
+NFT
+    fi
+    # the base table was just rebuilt: re-open the honeypot's decoys if it runs
+    if systemctl -q is-active veloguard-honeypot.service 2>/dev/null; then
+      "$(dirname "$(readlink -f "$0")")/veloguard-honeypot-net" up || true
+    fi ;;
+  stop)
+    nft delete table inet veloguard_base 2>/dev/null || true ;;
+  status)
+    nft list table inet veloguard_base ;;
+  *) echo "usage: veloguard-firewall start|stop|reload|status" >&2; exit 2 ;;
+esac

@@ -1,0 +1,3 @@
+# Inbound ports to open through VeloGuard's default-deny firewall, one per
+# line: "tcp 22", "udp 51820". Empty by default — nothing listens for the
+# network. Apply: sudo systemctl reload veloguard-firewall
