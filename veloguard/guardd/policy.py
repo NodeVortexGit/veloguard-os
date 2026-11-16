@@ -95,6 +95,8 @@ class PolicyEngine:
 
     def _is_protected(self, ip: str) -> str | None:
         addr = ipaddress.ip_address(ip)
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
         for cidr in self.policy.get("protected_cidrs", []):
             if addr in ipaddress.ip_network(cidr):
                 return cidr
@@ -117,9 +119,9 @@ class PolicyEngine:
             return Decision(Verdict.DENY,
                             f"action {action.type.value} not in allowed_actions")
 
-        # Blocking a protected range is refused outright — the AI cannot
-        # talk the guard into locking the user out of their own machine.
-        if action.type == ActionType.BLOCK_IP:
+        # Changes to protected addresses are refused for both block and
+        # unblock; neither direction may alter localhost or private ranges.
+        if action.type in (ActionType.BLOCK_IP, ActionType.UNBLOCK_IP):
             protected = self._is_protected(action.params["ip"])
             if protected:
                 return Decision(

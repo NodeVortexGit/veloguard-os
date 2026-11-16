@@ -94,8 +94,12 @@ class Action:
             ip = self.params.get("ip")
             if not ip:
                 raise ValueError(f"{self.type.value} requires an 'ip' param")
-            # Raises ValueError on garbage; normalises e.g. trailing zeros.
-            self.params["ip"] = str(ipaddress.ip_address(str(ip)))
+            # Raises ValueError on garbage and canonicalizes the address. An
+            # IPv4-mapped IPv6 address must use the IPv4 policy ranges too.
+            addr = ipaddress.ip_address(str(ip))
+            if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+                addr = addr.ipv4_mapped
+            self.params["ip"] = str(addr)
         if self.type in (ActionType.QUARANTINE, ActionType.RELEASE_QUARANTINE,
                          ActionType.KILL_QUARANTINE):
             if not self.params.get("target"):
