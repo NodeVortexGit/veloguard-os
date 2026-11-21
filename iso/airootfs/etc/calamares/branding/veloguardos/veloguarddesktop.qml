@@ -77,7 +77,7 @@ Pane {
         ListElement { key: "cleanconfig"; name: "Clean Config — Hyprland"; tag: "NodeVortex's rice · Dynamic Island"
             note: "NodeVortex's rice: the Dynamic Island shell, black + dark-blue glass, installed exactly as published — every keybind included. VeloGuard's own buttons (VPN, network trust, the guard, AI agent, AI usage) sit in its quick panel. Built from source during install (needs internet, ~15 min). Recommended on laptops." }
         ListElement { key: "hyprland"; name: "VeloGuard Hyprland"; tag: "tiling · guard bar · works offline"
-            note: "The default tiling desktop: Waybar with the guard shield, VPN and Wi-Fi trust built in, navy + cyan theme. Already on the disc — works offline." }
+            note: "The default tiling desktop: Waybar with the guard shield, VPN and Wi-Fi trust built in, the quick panel and AI usage; Frost — black and dark blue under frosted glass. Already on the disc — works offline." }
         ListElement { key: "gnome"; name: "GNOME"; tag: "polished · overview · gestures"
             note: "Full, polished desktop: Activities overview, its own settings and software centre, touchpad gestures. VeloGuard's buttons join its top bar and quick settings: the guard, VPN, network trust, AI usage." }
         ListElement { key: "xfce"; name: "Xfce"; tag: "classic panel + menu · light"

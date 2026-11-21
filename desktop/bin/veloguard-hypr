@@ -10,6 +10,11 @@
 #   veloguard-hypr dpms on|off|toggle
 #   veloguard-hypr exit
 set -u
+# niri runs the same hypridle setup: an older hypridle.conf still says
+# `veloguard-hypr dpms …` there, so hand those to niri's own command.
+if [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && [ -n "${NIRI_SOCKET:-}" ] && [ "${1:-}" = dpms ]; then
+  exec veloguard-session dpms "${2:-}"
+fi
 case "${1:-}" in
   dpms)
     case "${2:-}" in on|off|toggle) ;; *) echo "usage: veloguard-hypr dpms on|off|toggle" >&2; exit 2 ;; esac

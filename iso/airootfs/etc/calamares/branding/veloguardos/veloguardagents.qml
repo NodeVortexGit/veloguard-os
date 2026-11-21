@@ -85,7 +85,21 @@ Pane {
                     HoverHandler { id: hover }
                     RowLayout {
                         anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 10; spacing: 6
-                        CheckBox { checkable: false; checked: model.on }      // display only
+                        // display only; drawn here because the style's own box
+                        // was navy on navy — an unticked agent showed no box at all
+                        CheckBox {
+                            checkable: false; checked: model.on
+                            indicator: Rectangle {
+                                implicitWidth: 18; implicitHeight: 18; radius: 3
+                                x: parent.leftPadding; y: parent.height / 2 - height / 2
+                                color: model.on ? Theme.accent : "transparent"
+                                border.width: 1; border.color: model.on ? Theme.accent : Theme.muted
+                                Label {
+                                    anchors.centerIn: parent; visible: model.on
+                                    text: "✓"; color: Theme.deep; font.bold: true; font.pixelSize: 13
+                                }
+                            }
+                        }
                         ColumnLayout {
                             Layout.fillWidth: true; spacing: 1
                             Label {

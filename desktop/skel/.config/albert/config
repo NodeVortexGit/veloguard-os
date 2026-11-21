@@ -30,7 +30,9 @@ enabled=true
 enabled=true
 
 [docs]
-enabled=true
+# off: it fetches the docset list on every start and opens an error box
+# whenever that fails (offline, a captive portal). Turn it on to use docsets.
+enabled=false
 
 [files]
 enabled=true

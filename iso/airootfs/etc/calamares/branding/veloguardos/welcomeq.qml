@@ -33,20 +33,22 @@ Pane {
         model: config.languagesModel
         delegate: QtObject {
             property string en: model.englishLabel !== undefined ? model.englishLabel : ""
-            property string native: model.label !== undefined ? model.label : ""
+            // not "native": a reserved word in QML — the whole page failed to
+            // load ("Welcome Loading failed"), and with it the installer
+            property string nativeName: model.label !== undefined ? model.label : ""
         }
     }
     readonly property var langs: [
-        { code: "en_US", label: "English", english: "English", native: "english" },
-        { code: "bg_BG", label: "Български", english: "Bulgarian", native: "български" },
-        { code: "ja_JP", label: "日本語", english: "Japanese", native: "日本語" }
+        { code: "en_US", label: "English", english: "English", nativeName: "english" },
+        { code: "bg_BG", label: "Български", english: "Bulgarian", nativeName: "български" },
+        { code: "ja_JP", label: "日本語", english: "Japanese", nativeName: "日本語" }
     ]
     property string lang: "en_US"
     function uiIndexFor(l) {
         for (var i = 0; i < uiLangs.count; ++i) {
             var o = uiLangs.objectAt(i)
             if (!o) continue
-            if (o.en.indexOf(l.english) === 0 || o.native.toLowerCase().indexOf(l.native) === 0) return i
+            if (o.en.indexOf(l.english) === 0 || o.nativeName.toLowerCase().indexOf(l.nativeName) === 0) return i
         }
         return -1
     }
