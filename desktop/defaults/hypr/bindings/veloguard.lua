@@ -1,5 +1,11 @@
 -- VeloGuardOS additions to the default bindings — Lua port of veloguard.conf.
 hl.bind("SUPER + SHIFT + G", hl.dsp.exec_cmd("veloguard-guard-menu"),     { description = "Guard menu" })
+-- The same menu (the bar's top-left 󰒃 button) on a tap of Super+Ctrl, either order;
+-- tap again to close. On release, so Super+Ctrl+L / +V / +Backspace keep working.
+for _, key in ipairs({ "SUPER + CTRL + Control_L", "SUPER + CTRL + Super_L" }) do
+    hl.bind(key, hl.dsp.exec_cmd("pkill -x wofi || veloguard-guard-menu"),
+            { release = true, description = "VeloGuard search menu" })
+end
 hl.bind("SUPER + SHIFT + V", hl.dsp.exec_cmd("veloguard-guard-menu vpn"), { description = "VPN" })
 hl.bind("SUPER + SHIFT + A", hl.dsp.exec_cmd("veloguard-agent"),          { description = "AI agent" })
 hl.bind("SUPER + SHIFT + E", hl.dsp.exec_cmd("veloguard-agent ask"),      { description = "Ask an AI agent about an error" })
