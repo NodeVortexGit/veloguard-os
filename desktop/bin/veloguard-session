@@ -154,7 +154,9 @@ nightlight_set() {   # on|off
       if [ "$on" = on ]; then
         pgrep -x wlsunset >/dev/null && return 0
         have wlsunset || { note "Night light needs wlsunset" "Night light"; return 1; }
-        setsid -f wlsunset -t 4000 -T 4001 >/dev/null 2>&1
+        # day and night both ~4000 K: a constant warm tint (manual times, so no
+        # location is needed)
+        setsid -f wlsunset -t 4000 -T 4001 -S 06:00 -s 18:00 >/dev/null 2>&1
         sleep 1
         pgrep -x wlsunset >/dev/null || note "This desktop doesn't let apps tint the screen" "Night light"
       else pkill -x wlsunset; fi ;;
