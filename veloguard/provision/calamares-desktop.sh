@@ -131,6 +131,11 @@ case "$DE" in
           cosmic-terminal cosmic-settings cosmic-store xdg-desktop-portal-cosmic
           cosmic-wallpapers
           wlsunset)
+    # cosmic-session needs a Vulkan driver. The hardware step installed the
+    # GPU's own (Intel, AMD, Apple; NVIDIA's comes with its driver); with none
+    # (a VM, any other GPU) pacman would take its first provider, nvidia-utils
+    # — the NVIDIA driver on a machine without one. Mesa's software Vulkan.
+    pacman -T vulkan-driver >/dev/null 2>&1 || PKGS+=(vulkan-swrast)
     SESSION=/usr/share/wayland-sessions/cosmic.desktop ;;
   headless)
     headless ;;

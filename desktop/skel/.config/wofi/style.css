@@ -8,6 +8,14 @@ window {
   font-size: 14px;
 }
 
+/* No window shadow: with a GTK theme that has client-side shadows (COSMIC
+   hands GTK adw-gtk3) the menu lost 26px on every side and its last rows. */
+decoration {
+  margin: 0;
+  box-shadow: none;
+  border: none;
+}
+
 #input {
   margin: 8px;
   padding: 8px;

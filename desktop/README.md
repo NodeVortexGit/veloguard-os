@@ -120,6 +120,11 @@ What makes that possible:
 Changing your mind later: `sudo calamares-desktop.sh <desktop> <you>` installs
 another desktop with its VeloGuard rice; pick it at the login screen.
 
+Known gap: **night light on COSMIC**. The button is there, but COSMIC 1.11's
+compositor doesn't let apps tint the screen (no wlr-gamma-control), so it says
+so instead of turning on. Everywhere else it works: hyprsunset (Hyprland),
+wlsunset (niri), GNOME's own, gammastep (i3, Xfce).
+
 ## Theming
 
 A theme is a directory of color files under `/usr/share/veloguard/themes/`. The

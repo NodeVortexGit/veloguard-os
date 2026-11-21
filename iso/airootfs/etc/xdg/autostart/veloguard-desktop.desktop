@@ -7,4 +7,5 @@ NoDisplay=true
 # Hyprland, niri and i3 start it from their own config.
 OnlyShowIn=GNOME;XFCE;COSMIC;
 X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Phase=Applications
+# No X-GNOME-Autostart-Phase: systemd's autostart generator (how GNOME and
+# COSMIC start these) skips an entry that has one on GNOME — it never ran there.
