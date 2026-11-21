@@ -227,8 +227,10 @@ def main() -> int:
     c = colors()
     if fmt == "--polybar":
         # Only our own short texts reach polybar (no tooltips there): no
-        # outside text can smuggle a %{…} action tag in. Strip it anyway.
-        text = text.replace("%{", "")
+        # outside text can smuggle a %{…} action tag in. Strip it anyway —
+        # until none is left: one pass turns "%%{{A1:…" back into a tag.
+        while "%{" in text:
+            text = text.replace("%{", "")
         print(f"%{{F{c[colour]}}}{text}%{{F-}}" if text and colour else text)
     elif fmt == "--genmon":
         t = html.escape(text)
