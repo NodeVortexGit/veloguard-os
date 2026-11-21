@@ -397,8 +397,15 @@ def _auto_block(ex: NftExecutor, ip: str) -> str:
         return f"not blocked: {e}"
     engine = PolicyEngine.shared(DEFAULT_POLICY_PATH)
     decision = engine.evaluate(action)          # protected ranges + rate limit
-    if decision.verdict == Verdict.DENY and not _lan_blockable(ip):
-        return f"not blocked: {decision.reason}"
+    if decision.verdict == Verdict.DENY:
+        # A LAN visitor may pass the protected-range rule (_lan_blockable) and
+        # nothing else. evaluate() returns at the range check, before the rate
+        # limit — so overriding any DENY let one attacker cycling through
+        # spoofed neighbour addresses grow the kernel blocklist without bound.
+        if "protected range" not in decision.reason or not _lan_blockable(ip):
+            return f"not blocked: {decision.reason}"
+        if not engine._rate_ok():
+            return "not blocked: rate limit exceeded"
     try:
         out = ex.block_ip(action.params["ip"])
     except RuntimeError as e:
@@ -689,7 +696,16 @@ def _run_safe(rest: list[str]) -> int:
 # ===========================================================================
 
 def _integrity(rest: list[str]) -> int:
-    """guardd integrity update | check — the guard checks its own files."""
+    """guardd integrity update | check — the guard checks its own files.
+    The Rust check (rust/src/integrity.rs: covers hidden plugin files too, and
+    never loses a finding) runs when installed root-owned; this is the fallback."""
+    rs = Path(__file__).resolve().parent.parent / "bin" / "veloguard-integrity"
+    try:
+        st = rs.stat()
+        if st.st_uid == 0 and not st.st_mode & 0o022 and os.access(rs, os.X_OK):
+            os.execv(str(rs), [str(rs), *(rest or ["check"])])
+    except OSError:
+        pass
     from . import incident, integrity
     sub = rest[0] if rest else "check"
     if os.geteuid() != 0:

@@ -175,7 +175,7 @@ def check(source: str | None = None) -> dict:
     cur_v, lat_v = local_veloguard_version(), m.get("veloguard", {}).get("version")
     out["domains"]["veloguard"] = {
         "current": cur_v, "latest": lat_v,
-        "update_available": bool(lat_v) and lat_v != cur_v}
+        "update_available": bool(lat_v) and _vercmp(str(lat_v), cur_v) > 0}
     cur_k, lat_k = local_kernel_version(), m.get("kernel", {}).get("version")
     out["domains"]["kernel"] = {
         "current": cur_k, "latest": lat_k,
@@ -193,6 +193,18 @@ def apply_veloguard(source: str | None = None, dry_run: bool = True) -> str:
     art, want = info.get("artifact"), info.get("sha256")
     if not art or not want:
         raise UpdateError("manifest has no veloguard artifact")
+    # Same rule as the kernel: a validly-signed but OLD manifest (replayed, a
+    # stale mirror or CDN cache) must not walk the guard back onto a version
+    # with holes that were since fixed.
+    ver, cur = str(info.get("version") or ""), local_veloguard_version()
+    if not ver:
+        raise UpdateError("manifest has no veloguard version")
+    c = _vercmp(ver, cur)
+    if c == 0:
+        return f"veloguard already at {ver} — nothing to apply"
+    if c < 0:
+        raise UpdateError(f"manifest offers veloguard {ver} but {cur} is installed — "
+                          "downgrade refused (use `veloguard-update rollback` to go back on purpose)")
     if dry_run:
         return (f"[dry-run] would fetch {art}, verify sha256, back up "
                 f"{VELOGUARD_DIR} → .bak, then swap in v{info.get('version')}")
@@ -213,8 +225,9 @@ def apply_veloguard(source: str | None = None, dry_run: bool = True) -> str:
                 # able to write outside the install dir. (Python ≥ 3.12)
                 shutil.unpack_archive(str(tarball), str(VELOGUARD_DIR.parent),
                                       filter="data")
-            except TypeError:
-                shutil.unpack_archive(str(tarball), str(VELOGUARD_DIR.parent))
+            except TypeError:                      # fail closed, like the signature
+                raise UpdateError("this Python can't unpack the update safely "
+                                  "(needs 3.12+'s 'data' filter) — refused") from None
         except Exception as e:
             shutil.rmtree(VELOGUARD_DIR, ignore_errors=True)
             shutil.move(str(backup), str(VELOGUARD_DIR))

@@ -38,12 +38,27 @@ time, found among the requester's ancestors) — any other program, even one
 running as the same user, still gets the dialog — kept in /run (gone on
 reboot), at most 4 h, revocable (`--revoke`), and every command it covers is
 audited as "approved-by-grant". It lets the agent update VeloGuard's own files
-(maintenance); it never lets it switch the guard off (services, firewall
-table, audit log) unasked: those always get the dialog, grant or not.
+(maintenance); commands that plainly switch the guard off (services, firewall
+table, audit log) still get the dialog, grant or not. That is a pattern check,
+not a wall: a granted agent is root, and an obfuscated command, or one that
+first rewrites cmdguard (maintenance), gets past it — the dialog says so.
 
-  veloguard-elevate-root --agent NAME --cwd DIR -- COMMAND [ARGS...]   (via pkexec)
-  veloguard-elevate-root --agent NAME --grant 3h | --revoke | --grant-status
-Exit: the command's own status; 1 = denied / no desktop to ask on; 2 = usage.
+WHO IS ASKING is read from the process tree (guardd/agentid.py), not taken
+from --agent: the dialog names the nearest AI agent above this request — its
+product and version, process, start time, working folder, and whether it
+asked through its shell's `sudo` or the VeloGuard MCP server. --agent is only
+what the requester calls itself; when it doesn't match, the dialog says so.
+No known agent above it → the dialog names the exact program instead.
+
+  veloguard-elevate-root --agent NAME --cwd DIR [--reason TEXT] [--timeout SECS]
+                         [--report] -- COMMAND [ARGS...]                (via pkexec)
+  veloguard-elevate-root --agent NAME [--reason TEXT] [--report] --grant 90m|2h|1h30m
+  veloguard-elevate-root --revoke | --grant-status [--json]
+--reason: the agent's own words, shown as such. --timeout: root stops the
+command after SECS (exit 124). --report: one "VELOGUARD-ELEVATE {json}" line
+on stderr with the decision, for the MCP server.
+Exit: the command's own status; 1 = denied / no desktop to ask on; 2 = usage;
+124 = stopped at --timeout.
 """
 from __future__ import annotations
 
@@ -75,13 +90,25 @@ TIMEOUT = 120
 LOCK = "/run/veloguard-elevate.lock"
 GRANT = "/run/veloguard/elevate-grant.json"
 GRANT_STATUS = "/run/veloguard-grant.status"   # world-readable: expiry + agent name, for the bar
+GRANT_INFO = "/run/veloguard-grant.json"       # world-readable: which process holds it (MCP: "covers me?")
 MAX_GRANT = 4 * 3600
+MAX_TIMEOUT = 6 * 3600
+REASON_MAX = 300
 SCRIPT_MAX = 256 * 1024
 INTERPRETERS = re.compile(r"^(ba|z|da|k)?sh$|^python3?(\.\d+)?$|^perl$|^env$")
 AGENT_RE = re.compile(r"^[A-Za-z0-9 ._+-]{1,40}$")
+REPORT = False
 
 
-def die(msg: str, code: int = 1) -> None:
+def report(decision: str, how: str, **extra) -> None:
+    """The decision, machine-readable, for the MCP server (--report)."""
+    if REPORT:
+        print("VELOGUARD-ELEVATE " + json.dumps({"decision": decision, "how": how, **extra}),
+              file=sys.stderr, flush=True)
+
+
+def die(msg: str, code: int = 1, decision: str = "denied") -> None:
+    report("usage" if code == 2 and decision == "denied" else decision, msg)
     print(f"veloguard-elevate: {msg}", file=sys.stderr)
     sys.exit(code)
 
@@ -95,21 +122,101 @@ def audit(entry: dict) -> None:
         print(f"veloguard-elevate: audit log not written ({e})", file=sys.stderr)
 
 
-def parse(argv: list[str]) -> tuple[str, str, list[str]]:
-    agent, cwd = "a program", "/"
+def parse(argv: list[str]) -> dict:
+    """Options before `--` (or before --grant/--revoke/--grant-status)."""
+    global REPORT
+    o = {"agent": "a program", "cwd": "/", "reason": "", "timeout": 0, "cmd": None, "mode": "run",
+         "grant": "", "json": False}
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a == "--agent" and i + 1 < len(argv):
-            agent, i = argv[i + 1], i + 2
-        elif a == "--cwd" and i + 1 < len(argv):
-            cwd, i = argv[i + 1], i + 2
-        elif a == "--":
-            return agent, cwd, argv[i + 1:]
+        val = argv[i + 1] if i + 1 < len(argv) else None
+        if a in ("--agent", "--cwd", "--reason", "--timeout", "--grant") and val is not None:
+            if a == "--timeout":
+                if not val.isdigit():
+                    die("--timeout takes seconds", 2)
+                o["timeout"] = min(int(val), MAX_TIMEOUT)
+            elif a == "--grant":
+                o["mode"], o["grant"] = "grant", val
+            else:
+                o[a[2:]] = val
+            i += 2
+        elif a in ("--revoke", "--grant-status"):
+            o["mode"], i = a[2:], i + 1
+        elif a == "--json":
+            o["json"], i = True, i + 1
+        elif a == "--report":
+            REPORT, i = True, i + 1
+        elif a == "--" and o["mode"] == "run":
+            o["cmd"] = argv[i + 1:]
+            return o
         else:
             break
-    die("usage: veloguard-elevate-root --agent NAME --cwd DIR -- COMMAND [ARGS...]", 2)
+    if o["mode"] != "run" and i == len(argv):
+        return o
+    die("usage: veloguard-elevate-root --agent NAME --cwd DIR [--reason TEXT] [--timeout SECS] "
+        "-- COMMAND [ARGS...]  |  --grant 90m  |  --revoke  |  --grant-status", 2)
     raise AssertionError
+
+
+def clean_reason(text: str) -> str:
+    """The agent's stated reason: one line, printable, short."""
+    t = re.sub(r"[\x00-\x1f\x7f]+", " ", text or "")
+    t = re.sub(r"\s+", " ", t).strip()
+    return t if len(t) <= REASON_MAX else t[:REASON_MAX] + " …"
+
+
+def _agentid():
+    sys.path.insert(0, str(HERE))
+    from guardd import agentid
+    return agentid
+
+
+def who_is_asking(claimed: str, uid: int) -> dict:
+    """The agent (or exact program) behind this request, from the process tree."""
+    try:
+        return _agentid().describe(os.getppid(), claimed, uid)
+    except Exception as e:  # identification failing must not hide the request
+        return {"verified": False, "label": "an unidentified program", "pid": os.getppid(),
+                "name": "an unidentified program", "exe": "", "via": "shell",
+                "start": "", "error": str(e)}
+
+
+def who_line(who: dict) -> str:
+    try:
+        return _agentid().one_line(who)
+    except Exception:
+        return f"{who.get('name')} (pid {who.get('pid')})"
+
+
+def who_pango(who: dict) -> str:
+    try:
+        return _agentid().pango(who)
+    except Exception:
+        return f"<small>process {who.get('pid')}</small>"
+
+
+def visible(s) -> str:
+    """guardd.approve.visible: what the dialog shows has nothing hidden in it —
+    no newlines pushing the rest below the fold, no bidi reordering, no
+    zero-width characters. If that module can't load, everything outside
+    printable ASCII is written out instead: uglier, never hidden."""
+    try:
+        sys.path.insert(0, str(HERE))
+        from guardd.approve import visible as v
+        return v(s)
+    except Exception:
+        t = str(s).encode("ascii", "backslashreplace").decode()
+        return re.sub(r"[\x00-\x1f\x7f]", lambda m: f"\\x{ord(m.group()):02x}", t)
+
+
+def esc(s) -> str:
+    return html.escape(visible(s))
+
+
+def _span(secs: int) -> str:
+    h, m = secs // 3600, secs % 3600 // 60
+    return (f"{h} h" + (f" {m} min" if m else "")) if h else f"{max(m, 1)} min"
 
 
 def peer(sock: socket.socket) -> tuple[int, int]:
@@ -201,18 +308,6 @@ def _stat(pid: int) -> tuple[int, str, int] | None:
         return None
 
 
-def _is_agent(pid: int) -> bool:
-    try:
-        exe = os.readlink(f"/proc/{pid}/exe")
-        cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="replace")
-    except OSError:
-        return False
-    name = os.path.basename(exe)
-    return ("/.local/share/claude/versions/" in exe or name in ("claude", "codex", "codex-cli")
-            or (name.startswith(("node", "python")) and any(
-                k in cmd for k in ("kimi-code", "openclaw", "hermes", "@openai/codex"))))
-
-
 def _ancestors(pid: int):
     seen = 0
     while pid > 1 and seen < 64:
@@ -221,14 +316,6 @@ def _ancestors(pid: int):
             return
         yield pid, st
         pid, seen = st[0], seen + 1
-
-
-def agent_anchor(uid: int) -> dict | None:
-    """The nearest ancestor of this request that is an AI agent, run by `uid`."""
-    for pid, (ppid, start, puid) in _ancestors(os.getppid()):
-        if puid == uid and _is_agent(pid):
-            return {"pid": pid, "start": start, "exe": os.readlink(f"/proc/{pid}/exe")}
-    return None
 
 
 def load_grant(uid: int) -> dict | None:
@@ -248,25 +335,40 @@ def load_grant(uid: int) -> dict | None:
     return g
 
 
-def _duration(s: str) -> int:
-    m = re.fullmatch(r"(\d+)\s*([hm]?)", s.strip().lower())
-    if not m:
-        die("--grant takes a duration like 3h or 90m", 2)
-    n = int(m.group(1)) * (3600 if m.group(2) in ("h", "") else 60)
-    return min(n, MAX_GRANT)
+def _duration(s: str) -> tuple[int, int]:
+    """(granted seconds, asked seconds) for 90m / 2h / 1h30m / 3 (hours)."""
+    t = s.strip().lower().replace(" ", "")
+    m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m(?:in)?)?", t)
+    if t.isdigit():
+        asked = int(t) * 3600
+    elif m and (m.group(1) or m.group(2)):
+        asked = int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60
+    else:
+        die("--grant takes a duration like 45m, 2h or 1h30m", 2)
+        raise AssertionError
+    if asked < 60:
+        die("--grant needs at least 1 minute", 2)
+    return min(asked, MAX_GRANT), asked
 
 
-def ask(conn: socket.socket, agent: str, cwd: str, shown: str, warning: str = "",
-        text: str | None = None) -> str:
+def dialog_program() -> str:
+    """VeloGuard's own dialog (Esc = Deny, Ctrl+Enter = Approve; Rust, rust/ask)
+    when it's installed root-owned and not writable by anyone else — this runs
+    as root — else zenity (same flags, same exit codes)."""
+    ask = HERE / "bin" / "veloguard-ask"
+    try:
+        st = os.stat(ask)
+        if st.st_uid == 0 and not st.st_mode & 0o022 and os.access(ask, os.X_OK):
+            return str(ask)
+    except OSError:
+        pass
+    return "zenity"
+
+
+def ask(conn: socket.socket, title: str, text: str) -> str:
     """approved | denied | timeout — from a dialog only the user can answer."""
     tmp = tempfile.mkdtemp(prefix="vg-elevate-")          # root's, 0700
     os.makedirs(f"{tmp}/config", mode=0o700)
-    warn = (f"<span foreground='#e01b24'><b>⚠ VeloGuard: this {html.escape(warning)}.</b></span>\n\n"
-            if warning else "")
-    text = text or (f"<b>{html.escape(agent)}</b> wants to run a command as <b>root</b>:\n\n"
-            f"<tt>{html.escape(shown)}</tt>\n\n"
-            f"in <tt>{html.escape(cwd)}</tt>\n\n"
-            f"{warn}Approve only if you asked for this.")
     fd = conn.fileno()
     os.set_inheritable(fd, True)
     env = {"WAYLAND_SOCKET": str(fd), "GDK_BACKEND": "wayland",
@@ -276,9 +378,9 @@ def ask(conn: socket.socket, agent: str, cwd: str, shown: str, warning: str = ""
            "PATH": "/usr/bin", "LANG": os.environ.get("LANG", "C.UTF-8")}
     try:
         r = subprocess.run(
-            ["zenity", "--question", "--title", "VeloGuard — root approval",
+            [dialog_program(), "--question", "--title", title[:120],
              "--text", text, "--ok-label", "Approve", "--cancel-label", "Deny",
-             "--default-cancel", "--icon", "dialog-warning", "--width", "560",
+             "--default-cancel", "--icon", "dialog-warning", "--width", "600",
              "--timeout", str(TIMEOUT)],
             env=env, pass_fds=(fd,), stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -291,6 +393,22 @@ def ask(conn: socket.socket, agent: str, cwd: str, shown: str, warning: str = ""
     return {0: "approved", 5: "timeout"}.get(code, "denied")
 
 
+def command_text(who: dict, shown: str, cwd: str, warning: str, reason: str, timeout: int) -> str:
+    e = esc
+    t = (f"<b>{e(who['name'])}</b> wants to run a command as <b>root</b>:\n\n"
+         f"<tt>{e(shown)}</tt>\n\nin <tt>{e(cwd)}</tt>\n")
+    if visible(shown) != shown or visible(cwd) != cwd:
+        t += ("<span foreground='#e01b24'><b>⚠ It contains characters that don't show on screen — "
+              "they're written out above (\\n, \\u{…}).</b></span>\n")
+    if timeout:
+        t += f"<small>(VeloGuard stops it after {_span(timeout)} if it's still running)</small>\n"
+    if reason:
+        t += f"\nIts reason, in its own words: <i>{e(reason)}</i>\n"
+    if warning:
+        t += f"\n<span foreground='#e01b24'><b>⚠ VeloGuard: this {e(warning)}.</b></span>\n"
+    return t + "\n" + who_pango(who) + "\n\nApprove only if you asked for this."
+
+
 def main() -> None:
     if os.geteuid() != 0:
         die("must be started through pkexec (veloguard-elevate)", 2)
@@ -299,17 +417,23 @@ def main() -> None:
         user = pwd.getpwuid(uid).pw_name
     except (KeyError, ValueError):
         die("must be started through pkexec (veloguard-elevate)", 2)
-    argv = sys.argv[1:]
-    if "--grant" in argv or "--revoke" in argv or "--grant-status" in argv:
-        return grant_cmd(argv, uid, user)
-    agent, cwd, cmd = parse(argv)
+    o = parse(sys.argv[1:])
+    claimed = o["agent"] if AGENT_RE.match(o["agent"]) else "a program"
+    if o["mode"] in ("revoke", "grant-status"):
+        return grant_admin(o, uid, user, claimed)
+    who = who_is_asking(claimed, uid)
+    reason = clean_reason(o["reason"])
+    if o["mode"] == "grant":
+        return grant_cmd(o, uid, user, who, reason)
+    cmd = o["cmd"]
     if not cmd:
         die("no command given", 2)
-    if not AGENT_RE.match(agent):
-        agent = "a program"
-    cwd = os.path.realpath(cwd) if os.path.isdir(cwd) else "/"
+    cwd = os.path.realpath(o["cwd"]) if os.path.isdir(o["cwd"]) else "/"
     shown = shlex.join(cmd)
-    entry = {"agent": agent, "user": user, "cwd": cwd, "argv": cmd}
+    entry = {"agent": who.get("name"), "who": who_line(who), "verified": who.get("verified"),
+             "agent_pid": who.get("pid"), "user": user, "cwd": cwd, "argv": cmd,
+             **({"reason": reason} if reason else {}),
+             **({"timeout": o["timeout"]} if o["timeout"] else {})}
 
     lock = open(LOCK, "w")
     fcntl.flock(lock, fcntl.LOCK_EX)                     # one question at a time
@@ -323,108 +447,178 @@ def main() -> None:
         audit({**entry, "result": "approved-by-grant", "grant_expires": grant["expires"],
                **({"note": why} if verdict != "allow" else {})})
         lock.close()
-        return run_as_root(cmd, cwd, uid, user, agent, shown)
-    if len(shown) > MAX_SHOWN:
+        report("approved", "by the grant you gave", grant_expires=int(grant["expires"]))
+        return run_as_root(cmd, cwd, uid, user, who.get("name", ""), shown, o["timeout"])
+    if len(visible(shown)) > MAX_SHOWN:                  # as the dialog shows it
         audit({**entry, "result": "denied", "why": "too long to show"})
-        die(f"denied: the command is too long to show for approval ({len(shown)} chars) — "
+        die(f"denied: the command is too long to show for approval ({len(visible(shown))} chars) — "
             "put it in a script and run that")
     conn = verified_compositor(uid)
     if conn is None:
         audit({**entry, "result": "denied", "why": "no verified desktop session"})
         die("denied: no desktop session to ask you on (approval needs your screen) — "
-            "run the command yourself in a terminal")
+            "run the command yourself in a terminal", decision="no_desktop")
     if verdict == "deny":
         why = (f"{why} — it switches off part of VeloGuard's own protection" if cls == "disable"
                else f"{why} — it changes VeloGuard's own files")
-    answer = ask(conn, agent, cwd, shown, why if verdict in ("warn", "deny") else "")
+    answer = ask(conn, f"VeloGuard — {visible(who['name'])} asks for root",
+                 command_text(who, shown, cwd, why if verdict in ("warn", "deny") else "",
+                              reason, o["timeout"]))
     conn.close()
     audit({**entry, "result": answer, **({"warning": why} if verdict == "warn" else {})})
     lock.close()
     if answer != "approved":
-        die("denied by you" if answer == "denied" else "no answer in time — denied")
+        die("denied by you" if answer == "denied" else "no answer in time — denied",
+            decision="denied" if answer == "denied" else "timeout")
+    report("approved", "by you")
+    run_as_root(cmd, cwd, uid, user, who.get("name", ""), shown, o["timeout"])
 
-    run_as_root(cmd, cwd, uid, user, agent, shown)
+
+def _current_grant() -> dict | None:
+    try:
+        g = json.load(open(GRANT))
+        return g if time.time() < g.get("expires", 0) else None
+    except (OSError, ValueError):
+        return None
 
 
-def grant_cmd(argv: list[str], uid: int, user: str) -> None:
-    agent = argv[argv.index("--agent") + 1] if "--agent" in argv and argv.index("--agent") + 1 < len(argv) else "an AI agent"
-    agent = agent if AGENT_RE.match(agent) else "an AI agent"
-    if "--revoke" in argv:
+def grant_admin(o: dict, uid: int, user: str, claimed: str) -> None:
+    if o["mode"] == "revoke":
         try:
             os.unlink(GRANT)
             _clear_status()
-            audit({"agent": agent, "user": user, "result": "grant-revoked"})
+            audit({"agent": claimed, "user": user, "result": "grant-revoked"})
+            report("revoked", "grant revoked")
             print("grant revoked")
         except FileNotFoundError:
+            _clear_status()
+            report("revoked", "there was no grant")
             print("no grant")
         return
-    if "--grant-status" in argv:
-        try:
-            g = json.load(open(GRANT))
-            left = int(g["expires"] - time.time())
-            print(f"{g['agent']} (pid {g['pid']}): {max(left, 0) // 60} min left" if left > 0 else "expired")
-        except (OSError, ValueError, KeyError):
-            print("no grant")
+    g = _current_grant()
+    if o["json"]:
+        print(json.dumps({"active": False} if g is None else {
+            "active": True, "agent": g.get("agent"), "who": g.get("who"), "pid": g.get("pid"),
+            "start": g.get("start"), "expires": int(g["expires"]),
+            "minutes_left": int(g["expires"] - time.time()) // 60}))
         return
-    secs = _duration(argv[argv.index("--grant") + 1] if argv.index("--grant") + 1 < len(argv) else "")
-    anchor = agent_anchor(uid)
-    if anchor is None:
-        die("a grant is for an AI agent's own session — run this from inside the agent", 2)
+    print("no grant" if g is None else
+          f"{g['agent']} (pid {g['pid']}): {int(g['expires'] - time.time()) // 60} min left")
+
+
+def grant_cmd(o: dict, uid: int, user: str, who: dict, reason: str) -> None:
+    secs, asked = _duration(o["grant"])
+    if not who.get("verified"):
+        audit({"agent": who.get("name"), "who": who_line(who), "user": user,
+               "result": "grant-refused", "why": "not an AI agent's session"})
+        die("a grant is for an AI agent's own session — run this from inside the agent "
+            f"(this request came from {who.get('name')})", 2, decision="refused")
     conn = verified_compositor(uid)
     if conn is None:
-        die("denied: no desktop session to ask you on")
-    hours = f"{secs // 3600} h" + (f" {secs % 3600 // 60} min" if secs % 3600 else "") if secs >= 3600 else f"{secs // 60} min"
-    text = (f"<b>{html.escape(agent)}</b> (process {anchor['pid']}) asks to run root commands "
-            f"<b>without asking you</b> for the next <b>{hours}</b>, so it can work while you're away.\n\n"
-            "• Only this one running agent — any other program still gets this dialog.\n"
-            "• It may update VeloGuard's own files (maintenance).\n"
-            "• It still can't switch the guard off: its services, firewall and audit log stay refused.\n"
-            "• Every command is written to the audit log; ends on reboot or with "
-            "<tt>veloguard-elevate --revoke</tt>.\n\n"
-            "<span foreground='#e01b24'><b>Approve only if you asked for this.</b></span>")
-    answer = ask(conn, agent, "/", "", text=text)
+        die("denied: no desktop session to ask you on", decision="no_desktop")
+    e = esc
+    text = (f"<b>{e(who['name'])}</b> asks to run root commands <b>without asking you</b> "
+            f"for the next <b>{_span(secs)}</b>, so it can work while you're away.\n")
+    if asked > secs:
+        text += f"<small>(it asked for {_span(asked)}; the most VeloGuard gives is {_span(MAX_GRANT)})</small>\n"
+    if reason:
+        text += f"\nIts reason, in its own words: <i>{e(reason)}</i>\n"
+    text += (f"\n• Only this one running agent — process {who['pid']}"
+             + (f" ({e(who['role'])})" if who.get("role") else "")
+             + " and what it starts. Any other program still gets this dialog.\n"
+             "• It may update VeloGuard's own files (maintenance).\n"
+             "• Commands that plainly switch the guard off (its services, firewall, audit log) still "
+             "come to you — but this is root: a command written to slip past VeloGuard's checks, "
+             "or one that rewrites them, isn't caught. Grant it only to an agent you'd trust with root.\n"
+             "• Every command is written to the audit log; it ends on reboot, when that process exits, "
+             "or with <tt>veloguard-elevate --revoke</tt>.\n")
+    old = _current_grant()
+    if old and old.get("pid") != who["pid"]:
+        text += (f"\n<span foreground='#f5a623'>This replaces the grant {e(str(old.get('agent')))} has now "
+                 f"({int(old['expires'] - time.time()) // 60} min left).</span>\n")
+    text += "\n" + who_pango(who) + "\n\n<span foreground='#e01b24'><b>Approve only if you asked for this.</b></span>"
+    answer = ask(conn, f"VeloGuard — {visible(who['name'])} asks for {_span(secs)} of root", text)
     conn.close()
-    audit({"agent": agent, "user": user, "result": f"grant-{answer}", "seconds": secs, "anchor": anchor})
+    anchor = {"pid": who["pid"], "start": who["start"], "exe": who["exe"]}
+    audit({"agent": who["name"], "who": who_line(who), "user": user, "result": f"grant-{answer}",
+           "seconds": secs, "asked_seconds": asked, "anchor": anchor,
+           **({"reason": reason} if reason else {})})
     if answer != "approved":
-        die("denied by you" if answer == "denied" else "no answer in time — denied")
+        die("denied by you" if answer == "denied" else "no answer in time — denied",
+            decision="denied" if answer == "denied" else "timeout")
+    expires = time.time() + secs
     os.makedirs(os.path.dirname(GRANT), mode=0o700, exist_ok=True)
     fd = os.open(GRANT + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump({**anchor, "uid": uid, "agent": agent, "expires": time.time() + secs,
-                   "scope": "maintenance"}, f)
+        json.dump({**anchor, "uid": uid, "agent": who["name"], "who": who_line(who),
+                   "expires": expires, "scope": "maintenance"}, f)
     os.replace(GRANT + ".tmp", GRANT)
-    _write_status(int(time.time() + secs), agent)
-    print(f"granted: {agent} may run root commands without asking for {hours}")
+    _write_status(int(expires), who["name"], {**anchor, "who": who_line(who)})
+    report("granted", "by you", seconds=secs, asked_seconds=asked, expires=int(expires),
+           pid=who["pid"])
+    print(f"granted: {who['name']} may run root commands without asking for {_span(secs)}")
 
 
-def _write_status(expires: int, agent: str) -> None:
+def _write_atomic(path: str, text: str) -> None:
+    fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.replace(path + ".tmp", path)
+
+
+def _write_status(expires: int, agent: str, info: dict) -> None:
     try:
-        fd = os.open(GRANT_STATUS + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-        with os.fdopen(fd, "w") as f:
-            f.write(f"{expires} {agent}\n")
-        os.replace(GRANT_STATUS + ".tmp", GRANT_STATUS)
+        _write_atomic(GRANT_STATUS, f"{expires} {agent}\n")
+        _write_atomic(GRANT_INFO, json.dumps({"expires": expires, "agent": agent, **info}) + "\n")
     except OSError:
         pass
 
 
 def _clear_status() -> None:
-    try:
-        os.unlink(GRANT_STATUS)
-    except OSError:
-        pass
+    for p in (GRANT_STATUS, GRANT_INFO):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
 
 
-def run_as_root(cmd: list[str], cwd: str, uid: int, user: str, agent: str, shown: str) -> None:
+def run_as_root(cmd: list[str], cwd: str, uid: int, user: str, agent: str, shown: str,
+                timeout: int = 0) -> None:
     pw = pwd.getpwuid(uid)
     env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/bin", "HOME": "/root",
            "LANG": os.environ.get("LANG", "C.UTF-8"), "TERM": os.environ.get("TERM", "dumb"),
            "SUDO_USER": user, "SUDO_UID": str(uid), "SUDO_GID": str(pw.pw_gid),
            "SUDO_COMMAND": shown[:MAX_SHOWN], "VELOGUARD_ELEVATED_FOR": agent}
     os.chdir(cwd)
+    if not timeout:
+        try:
+            os.execvpe(cmd[0], cmd, env)
+        except OSError as e:
+            die(f"{cmd[0]}: {e.strerror}", 127, decision="failed")
+    # A time limit: the requester runs as the user and can't signal a root
+    # process, so root keeps the clock — the command gets its own process
+    # group, TERM at the limit, KILL 5 s later, exit 124 (like timeout(1)).
     try:
-        os.execvpe(cmd[0], cmd, env)
+        p = subprocess.Popen(cmd, env=env, start_new_session=True)
     except OSError as e:
-        die(f"{cmd[0]}: {e.strerror}", 127)
+        die(f"{cmd[0]}: {e.strerror}", 127, decision="failed")
+        raise AssertionError
+    try:
+        rc = p.wait(timeout=timeout)
+        sys.exit(128 - rc if rc < 0 else rc)
+    except subprocess.TimeoutExpired:
+        for sig, wait in ((15, 5), (9, 5)):
+            try:
+                os.killpg(p.pid, sig)
+            except ProcessLookupError:
+                break
+            try:
+                p.wait(timeout=wait)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        print(f"veloguard-elevate: stopped after {_span(timeout)} (the time limit)", file=sys.stderr)
+        sys.exit(124)
 
 
 if __name__ == "__main__":

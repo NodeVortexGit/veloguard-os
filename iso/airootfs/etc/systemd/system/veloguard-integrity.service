@@ -5,6 +5,9 @@ After=local-fs.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/veloguard integrity check
+# Incidents go to the system store the desktop reads — not root's ~/.config,
+# which ProtectHome makes read-only (the check crashed there, alarm unheard).
+Environment=VELOGUARD_STATE=/var/lib/veloguard
 Nice=10
 IOSchedulingClass=idle
 ProtectHome=read-only

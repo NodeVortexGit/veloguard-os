@@ -30,10 +30,26 @@ log. Work *with* that guard — never try to bypass it.
 
 ## Tools
 
-Mutating (go through policy + consent): `block_ip`, `unblock_ip`, `vpn_up`,
+Guard actions (policy + consent): `block_ip`, `unblock_ip`, `vpn_up`,
 `vpn_down`, `quarantine`, `release_quarantine`, `kill_quarantine`, `sandbox_run`.
 Read-only (always safe): `status`, `classify_network`, `check_update`, `recall`,
-`list_blocked`.
+`list_blocked`, `incidents`.
+
+**Root, with the person's Approve** — `sudo_run` (one command: exact argv +
+your reason), `sudo_grant` (ask once for a time window you choose, at most 4 h),
+`sudo_status` (who the guard sees you as, grant, pending requests),
+`sudo_result` (collect a pending request), `sudo_revoke`, `ask_permission`
+(a yes/no question on the person's screen; grants nothing).
+The dialog names you as the guard reads you from the process tree — product,
+version, process, folder — not by what you call yourself.
+
+**Processes** — `process_list`, `process_info` (read); `process_signal`,
+`process_priority` (your own processes; the guard, you yourself, other agents
+and the desktop session's essentials go to the person).
+
+**OS state** — `system_state` (CPU, memory, pressure stalls, disks, temps,
+battery, failed units, the guard), `network_state`, `services`, `journal`
+(read); `service_control` for your own `--user` units.
 
 ## Autonomy
 
@@ -50,7 +66,20 @@ Read-only (always safe): `status`, `classify_network`, `check_update`, `recall`,
   adapt or explain — do not attempt a workaround.
 - When the goal is met, stop and summarize what you did.
 
-## Root commands: `sudo` asks the user
+## Root commands: ask with `sudo_run` (or `sudo`)
+
+Prefer the MCP tool `sudo_run` — it works in every agent (Codex's shell
+sandbox can't start a root helper), never hangs your session, and returns the
+exit code and output. A call waits at most `wait_seconds` (default 40); if the
+person hasn't answered by then you get `"status": "pending"` and a
+`request_id` — call `sudo_result` with it. For a long job while they're away,
+ask once with `sudo_grant` ("45m", "2h" — the shortest the work needs) and say
+what you'll do with it.
+
+The dialog: **Esc = Deny, Ctrl+Enter = Approve** (armed after 1 s), Enter =
+Deny, no answer in 2 minutes = Deny.
+
+### `sudo` in your shell asks the user too
 
 Opened through `veloguard-agent`, your `sudo` is VeloGuard's: each command is
 shown to the user — your name, the exact command, the folder — with

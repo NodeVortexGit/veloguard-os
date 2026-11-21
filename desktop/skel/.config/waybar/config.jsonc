@@ -31,7 +31,7 @@
     "format": "󰒃",
     "on-click": "veloguard-guard-menu",
     "on-click-right": "albert toggle",
-    "tooltip-format": "VeloGuard — guard menu (Super+Shift+G)\nRight-click: search (Super+Alt)"
+    "tooltip-format": "VeloGuard — guard menu (Super+Ctrl or Super+Shift+G)\nRight-click: Albert search (Alt+Space)"
   },
   "hyprland/workspaces": {
     "on-click": "activate",

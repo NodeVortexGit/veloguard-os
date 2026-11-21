@@ -14,6 +14,19 @@ set -euo pipefail
 HOME_DIR="${VELOGUARD_HOME:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
 VENV="${VELOGUARD_VENV:-$HOME_DIR/.venv}"
 
+# check-command — what every agent's hook asks before each tool call — runs in
+# Rust (rust/src/cmdguard.rs, same verdicts byte for byte): ~3 ms instead of
+# ~63 ms of Python start-up. Only a root-owned binary nobody else can write;
+# else, or with VELOGUARD_PYTHON_CMDGUARD=1, Python answers as before.
+if [ "${1:-}" = check-command ] && [ -z "${VELOGUARD_PYTHON_CMDGUARD:-}" ]; then
+  RS="$HOME_DIR/bin/veloguard-check"
+  if [ -x "$RS" ] && read -r own mode < <(stat -Lc '%u %a' -- "$RS") \
+     && [ "$own" = 0 ] && (( (8#$mode & 8#022) == 0 )); then
+    shift
+    exec "$RS" "$@"
+  fi
+fi
+
 PY="python3"
 [ -x "$VENV/bin/python" ] && PY="$VENV/bin/python"
 

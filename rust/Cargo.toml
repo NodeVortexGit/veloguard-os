@@ -1,0 +1,35 @@
+[package]
+name = "veloguard"
+version = "0.1.0"
+edition = "2024"
+description = "VeloGuardOS guard, in Rust: the MCP server first, the rest module by module"
+license = "GPL-2.0-only"
+publish = false
+
+[dependencies]
+serde_json = "1"
+libc = "0.2"
+sha2 = "0.10"
+regex = "1"
+
+[[bin]]
+name = "veloguard-mcp"
+path = "src/bin/veloguard-mcp.rs"
+
+[[bin]]
+name = "veloguard-integrity"
+path = "src/bin/veloguard-integrity.rs"
+
+[[bin]]
+name = "veloguard-check"
+path = "src/bin/veloguard-check.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
+members = ["ask"]
