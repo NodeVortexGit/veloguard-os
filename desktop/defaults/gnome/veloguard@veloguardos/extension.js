@@ -205,6 +205,9 @@ class UsageButton extends PanelMenu.Button {
         this._state = state;
         this._label = new St.Label({text: 'AI', y_align: Clutter.ActorAlign.CENTER});
         this.add_child(this._label);
+        // Never empty: GNOME's PopupMenu.open() refuses an empty menu, so a
+        // menu filled only on opening never opened (click and Super+U alike)
+        this._build(null);
         this.menu.connect('open-state-changed', (_m, open) => {
             if (open)
                 this._fill();
@@ -219,37 +222,42 @@ class UsageButton extends PanelMenu.Button {
     }
 
     _fill() {
-        this.menu.removeAll();
-        const loading = new PopupMenu.PopupMenuItem('Reading your plans…', {reactive: false});
-        this.menu.addMenuItem(loading);
+        this._build(null);
         capture(['veloguard-ai-usage', '--plans'], out => {
-            this.menu.removeAll();
             let plans = [];
             try {
                 plans = JSON.parse(out ?? '[]');
             } catch (_e) {}
-            if (!plans.length)
-                this.menu.addMenuItem(new PopupMenu.PopupMenuItem('No AI plan usage yet', {reactive: false}));
-            for (const p of plans) {
-                const head = new PopupMenu.PopupMenuItem(`${p.label}${p.current ? '  ·  in use' : ''}`, {reactive: false});
-                head.label.style = 'font-weight: bold;';
-                this.menu.addMenuItem(head);
-                if (!p.windows?.length && p.note)
-                    this.menu.addMenuItem(new PopupMenu.PopupMenuItem(p.note, {reactive: false}));
-                for (const w of p.windows ?? []) {
-                    const pct = w.percent === null ? null : Math.min(100, Math.round(w.percent));
-                    const filled = pct === null ? 0 : Math.round(pct / 10);
-                    const bar = '▰'.repeat(filled) + '▱'.repeat(10 - filled);
-                    const line = `${w.name}   ${bar}  ${pct === null ? '?' : `${pct}%`}${w.resets_text ? `   ${w.resets_text}` : ''}`;
-                    const row = new PopupMenu.PopupMenuItem(line, {reactive: false});
-                    if (pct !== null && pct >= 90)
-                        row.label.style = 'color: #f26d7d;';
-                    this.menu.addMenuItem(row);
-                }
-            }
-            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            this.menu.addAction('Open your AI agent', () => sh('veloguard-agent'));
+            this._build(plans);
         });
+    }
+
+    // plans: null while reading, else the parsed `veloguard-ai-usage --plans`
+    _build(plans) {
+        this.menu.removeAll();
+        if (plans === null)
+            this.menu.addMenuItem(new PopupMenu.PopupMenuItem('Reading your plans…', {reactive: false}));
+        else if (!plans.length)
+            this.menu.addMenuItem(new PopupMenu.PopupMenuItem('No AI plan usage yet', {reactive: false}));
+        for (const p of plans ?? []) {
+            const head = new PopupMenu.PopupMenuItem(`${p.label}${p.current ? '  ·  in use' : ''}`, {reactive: false});
+            head.label.style = 'font-weight: bold;';
+            this.menu.addMenuItem(head);
+            if (!p.windows?.length && p.note)
+                this.menu.addMenuItem(new PopupMenu.PopupMenuItem(p.note, {reactive: false}));
+            for (const w of p.windows ?? []) {
+                const pct = w.percent === null ? null : Math.min(100, Math.round(w.percent));
+                const filled = pct === null ? 0 : Math.round(pct / 10);
+                const bar = '▰'.repeat(filled) + '▱'.repeat(10 - filled);
+                const line = `${w.name}   ${bar}  ${pct === null ? '?' : `${pct}%`}${w.resets_text ? `   ${w.resets_text}` : ''}`;
+                const row = new PopupMenu.PopupMenuItem(line, {reactive: false});
+                if (pct !== null && pct >= 90)
+                    row.label.style = 'color: #f26d7d;';
+                this.menu.addMenuItem(row);
+            }
+        }
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this.menu.addAction('Open your AI agent', () => sh('veloguard-agent'));
     }
 
     destroy() {

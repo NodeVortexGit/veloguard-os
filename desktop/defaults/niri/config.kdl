@@ -112,13 +112,14 @@ window-rule {
     open-floating true
 }
 
-// The bar, the quick panel, notifications, menus and the lock screen's
-// neighbours get the same frosted glass.
+// The bar, the quick panel and the menus get the same frosted glass. Not
+// notifications (swaync): its layers are far bigger than what they draw (the
+// centre covers the whole screen, so a click outside closes it), and niri
+// blurs a layer's whole area — Hyprland skips the see-through part
+// (ignore_alpha); here the screen itself would go blurry.
 layer-rule {
     match namespace="^waybar$"
     match namespace="^veloguard-quickpanel$"
-    match namespace="^swaync-control-center$"
-    match namespace="^swaync-notification-window$"
     match namespace="^wofi$"
     match namespace="^swayosd$"
     background-effect {
