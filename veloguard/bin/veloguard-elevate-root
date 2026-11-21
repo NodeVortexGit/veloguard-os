@@ -38,8 +38,10 @@ time, found among the requester's ancestors) — any other program, even one
 running as the same user, still gets the dialog — kept in /run (gone on
 reboot), at most 4 h, revocable (`--revoke`), and every command it covers is
 audited as "approved-by-grant". It lets the agent update VeloGuard's own files
-(maintenance); it never lets it switch the guard off (services, firewall
-table, audit log) unasked: those always get the dialog, grant or not.
+(maintenance); commands that plainly switch the guard off (services, firewall
+table, audit log) still get the dialog, grant or not. That is a pattern check,
+not a wall: a granted agent is root, and an obfuscated command, or one that
+first rewrites cmdguard (maintenance), gets past it — the dialog says so.
 
 WHO IS ASKING is read from the process tree (guardd/agentid.py), not taken
 from --agent: the dialog names the nearest AI agent above this request — its
@@ -192,6 +194,24 @@ def who_pango(who: dict) -> str:
         return _agentid().pango(who)
     except Exception:
         return f"<small>process {who.get('pid')}</small>"
+
+
+def visible(s) -> str:
+    """guardd.approve.visible: what the dialog shows has nothing hidden in it —
+    no newlines pushing the rest below the fold, no bidi reordering, no
+    zero-width characters. If that module can't load, everything outside
+    printable ASCII is written out instead: uglier, never hidden."""
+    try:
+        sys.path.insert(0, str(HERE))
+        from guardd.approve import visible as v
+        return v(s)
+    except Exception:
+        t = str(s).encode("ascii", "backslashreplace").decode()
+        return re.sub(r"[\x00-\x1f\x7f]", lambda m: f"\\x{ord(m.group()):02x}", t)
+
+
+def esc(s) -> str:
+    return html.escape(visible(s))
 
 
 def _span(secs: int) -> str:
@@ -374,9 +394,12 @@ def ask(conn: socket.socket, title: str, text: str) -> str:
 
 
 def command_text(who: dict, shown: str, cwd: str, warning: str, reason: str, timeout: int) -> str:
-    e = html.escape
+    e = esc
     t = (f"<b>{e(who['name'])}</b> wants to run a command as <b>root</b>:\n\n"
          f"<tt>{e(shown)}</tt>\n\nin <tt>{e(cwd)}</tt>\n")
+    if visible(shown) != shown or visible(cwd) != cwd:
+        t += ("<span foreground='#e01b24'><b>⚠ It contains characters that don't show on screen — "
+              "they're written out above (\\n, \\u{…}).</b></span>\n")
     if timeout:
         t += f"<small>(VeloGuard stops it after {_span(timeout)} if it's still running)</small>\n"
     if reason:
@@ -426,9 +449,9 @@ def main() -> None:
         lock.close()
         report("approved", "by the grant you gave", grant_expires=int(grant["expires"]))
         return run_as_root(cmd, cwd, uid, user, who.get("name", ""), shown, o["timeout"])
-    if len(shown) > MAX_SHOWN:
+    if len(visible(shown)) > MAX_SHOWN:                  # as the dialog shows it
         audit({**entry, "result": "denied", "why": "too long to show"})
-        die(f"denied: the command is too long to show for approval ({len(shown)} chars) — "
+        die(f"denied: the command is too long to show for approval ({len(visible(shown))} chars) — "
             "put it in a script and run that")
     conn = verified_compositor(uid)
     if conn is None:
@@ -438,7 +461,7 @@ def main() -> None:
     if verdict == "deny":
         why = (f"{why} — it switches off part of VeloGuard's own protection" if cls == "disable"
                else f"{why} — it changes VeloGuard's own files")
-    answer = ask(conn, f"VeloGuard — {who['name']} asks for root",
+    answer = ask(conn, f"VeloGuard — {visible(who['name'])} asks for root",
                  command_text(who, shown, cwd, why if verdict in ("warn", "deny") else "",
                               reason, o["timeout"]))
     conn.close()
@@ -493,7 +516,7 @@ def grant_cmd(o: dict, uid: int, user: str, who: dict, reason: str) -> None:
     conn = verified_compositor(uid)
     if conn is None:
         die("denied: no desktop session to ask you on", decision="no_desktop")
-    e = html.escape
+    e = esc
     text = (f"<b>{e(who['name'])}</b> asks to run root commands <b>without asking you</b> "
             f"for the next <b>{_span(secs)}</b>, so it can work while you're away.\n")
     if asked > secs:
@@ -504,7 +527,9 @@ def grant_cmd(o: dict, uid: int, user: str, who: dict, reason: str) -> None:
              + (f" ({e(who['role'])})" if who.get("role") else "")
              + " and what it starts. Any other program still gets this dialog.\n"
              "• It may update VeloGuard's own files (maintenance).\n"
-             "• It still can't switch the guard off: its services, firewall and audit log stay refused.\n"
+             "• Commands that plainly switch the guard off (its services, firewall, audit log) still "
+             "come to you — but this is root: a command written to slip past VeloGuard's checks, "
+             "or one that rewrites them, isn't caught. Grant it only to an agent you'd trust with root.\n"
              "• Every command is written to the audit log; it ends on reboot, when that process exits, "
              "or with <tt>veloguard-elevate --revoke</tt>.\n")
     old = _current_grant()
@@ -512,7 +537,7 @@ def grant_cmd(o: dict, uid: int, user: str, who: dict, reason: str) -> None:
         text += (f"\n<span foreground='#f5a623'>This replaces the grant {e(str(old.get('agent')))} has now "
                  f"({int(old['expires'] - time.time()) // 60} min left).</span>\n")
     text += "\n" + who_pango(who) + "\n\n<span foreground='#e01b24'><b>Approve only if you asked for this.</b></span>"
-    answer = ask(conn, f"VeloGuard — {who['name']} asks for {_span(secs)} of root", text)
+    answer = ask(conn, f"VeloGuard — {visible(who['name'])} asks for {_span(secs)} of root", text)
     conn.close()
     anchor = {"pid": who["pid"], "start": who["start"], "exe": who["exe"]}
     audit({"agent": who["name"], "who": who_line(who), "user": user, "result": f"grant-{answer}",

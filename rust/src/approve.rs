@@ -64,11 +64,18 @@ fn class_line(cls: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+pub const HIDDEN_LINE: &str = "It contains characters that don't show on screen — they're written out above (\\n, \\u{…}).";
+
 pub fn text_for(agent: &str, what: &str, reason: &str, cls: &str, cwd: Option<&str>, who: Option<&Who>) -> String {
+    let shown = sys::clip(what, 700);
     let mut t = format!("<b>{}</b> wants to do something VeloGuard normally doesn't let an agent do:\n\n<tt>{}</tt>\n",
-                        e(if agent.is_empty() { "An AI agent" } else { agent }), e(&sys::clip(what, 700)));
-    if let Some(c) = cwd.filter(|c| !c.is_empty()) {
+                        e(if agent.is_empty() { "An AI agent" } else { agent }), e(&shown));
+    let cwd = cwd.filter(|c| !c.is_empty());
+    if let Some(c) = cwd {
         t += &format!("\nin <tt>{}</tt>\n", e(c));
+    }
+    if sys::visible(&shown) != shown || cwd.is_some_and(|c| sys::visible(c) != c) {
+        t += &format!("<span foreground='#e01b24'><b>{}</b></span>\n", e(HIDDEN_LINE));
     }
     t += &format!("\nWhy it was stopped: it {}.\n", e(if reason.is_empty() { "is restricted" } else { reason }));
     if let Some((color, line)) = class_line(cls) {

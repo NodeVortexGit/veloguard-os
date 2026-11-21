@@ -153,8 +153,64 @@ pub fn which(name: &str) -> Option<String> {
         .find(|p| std::path::Path::new(p).is_file())
 }
 
-/// Python's html.escape (quote=True) — what Pango markup needs.
+/// A character that doesn't show as itself in a dialog: controls, format
+/// characters (bidi, zero-width), separators other than the plain space,
+/// private use, non-characters, combining marks, blank letters. The set of
+/// guardd/approve.py `visible` (which reads categories from unicodedata;
+/// std has no category table, so the ranges that matter are listed).
+fn hidden(c: char) -> bool {
+    c.is_control() || matches!(c as u32,
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF
+        | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3
+        | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F                       // Cf
+        | 0x2028 | 0x2029                                                      // Zl, Zp
+        | 0x00A0 | 0x1680 | 0x2000..=0x200A | 0x202F | 0x205F | 0x3000          // Zs but ' '
+        | 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD             // Co
+        | 0xFDD0..=0xFDEF | 0xFFFE | 0xFFFF                                      // non-characters
+        | 0x0300..=0x036F | 0x0483..=0x0489 | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF // Mn, Me
+        | 0x20D0..=0x20FF | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F | 0xE0100..=0xE01EF
+        | 0x17B4 | 0x17B5
+        | 0x115F | 0x1160 | 0x3164 | 0xFFA0 | 0x2800)                          // blank letters
+}
+
+/// The text with every character that doesn't show as itself written out
+/// (\n, \x1b, \u{202e}) and runs of 4+ spaces counted. A dialog shows the
+/// person what an agent will do, and the agent chooses that text: 30 newlines
+/// pushed "; curl … | sh" below the dialog's fold, U+202E drew the rest of the
+/// line backwards, U+200B hid inside a path.
+pub fn visible(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    let mut run = 0usize;
+    let flush = |o: &mut String, n: usize| {
+        if n >= 4 { o.push_str(&format!(" ⟨{n} spaces⟩ ")) } else { o.extend(std::iter::repeat(' ').take(n)) }
+    };
+    for c in s.chars() {
+        if c == ' ' {
+            run += 1;
+            continue;
+        }
+        flush(&mut o, run);
+        run = 0;
+        match c {
+            '\n' => o.push_str("\\n"),
+            '\t' => o.push_str("\\t"),
+            '\r' => o.push_str("\\r"),
+            c if hidden(c) => {
+                let u = c as u32;
+                o.push_str(&if u < 0x100 { format!("\\x{u:02x}") } else { format!("\\u{{{u:04x}}}") });
+            }
+            c => o.push(c),
+        }
+    }
+    flush(&mut o, run);
+    o
+}
+
+/// For Pango markup in a dialog: Python's html.escape (quote=True) of
+/// `visible(s)` — nothing a requester wrote can hide or reorder the text.
 pub fn escape(s: &str) -> String {
+    let s = visible(s);
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -187,6 +243,21 @@ mod tests {
     #[test]
     fn escape_matches_python_html_escape() {
         assert_eq!(escape("<b>\"x\" & 'y'</b>"), "&lt;b&gt;&quot;x&quot; &amp; &#x27;y&#x27;&lt;/b&gt;");
+    }
+
+    #[test]
+    fn nothing_a_requester_writes_hides_in_a_dialog() {
+        // the same cases as tests/test_guard.py DialogText — Python and Rust agree
+        assert_eq!(visible("echo hi\n\n; curl x | sh"), "echo hi\\n\\n; curl x | sh");
+        assert_eq!(visible("a\u{202e}b\u{200b}c\u{2066}d"), "a\\u{202e}b\\u{200b}c\\u{2066}d");
+        assert_eq!(visible("x\u{1b}[2Jy\u{7f}\u{85}"), "x\\x1b[2Jy\\x7f\\x85");
+        assert_eq!(visible("a\u{a0}b\u{3000}c\u{2028}d\u{3164}e"), "a\\xa0b\\u{3000}c\\u{2028}d\\u{3164}e");
+        assert_eq!(visible("Z\u{0301}\u{0301}"), "Z\\u{0301}\\u{0301}");
+        assert_eq!(visible("true        x"), "true ⟨8 spaces⟩ x");
+        assert_eq!(visible("a   b"), "a   b");
+        // ordinary text — Bulgarian, emoji, punctuation — shows as it is
+        assert_eq!(visible("Обнови пакетите 🙂 — ok"), "Обнови пакетите 🙂 — ok");
+        assert_eq!(escape("<\u{202e}>"), "&lt;\\u{202e}&gt;");
     }
 
     #[test]

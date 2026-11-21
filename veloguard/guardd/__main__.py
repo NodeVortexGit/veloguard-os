@@ -397,8 +397,15 @@ def _auto_block(ex: NftExecutor, ip: str) -> str:
         return f"not blocked: {e}"
     engine = PolicyEngine.shared(DEFAULT_POLICY_PATH)
     decision = engine.evaluate(action)          # protected ranges + rate limit
-    if decision.verdict == Verdict.DENY and not _lan_blockable(ip):
-        return f"not blocked: {decision.reason}"
+    if decision.verdict == Verdict.DENY:
+        # A LAN visitor may pass the protected-range rule (_lan_blockable) and
+        # nothing else. evaluate() returns at the range check, before the rate
+        # limit — so overriding any DENY let one attacker cycling through
+        # spoofed neighbour addresses grow the kernel blocklist without bound.
+        if "protected range" not in decision.reason or not _lan_blockable(ip):
+            return f"not blocked: {decision.reason}"
+        if not engine._rate_ok():
+            return "not blocked: rate limit exceeded"
     try:
         out = ex.block_ip(action.params["ip"])
     except RuntimeError as e:

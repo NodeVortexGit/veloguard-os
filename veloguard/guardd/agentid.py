@@ -265,8 +265,9 @@ def one_line(d: dict) -> str:
 
 
 def pango(d: dict) -> str:
-    """The 'who is asking' block for a zenity dialog (Pango markup, escaped)."""
-    from html import escape as e
+    """The 'who is asking' block for a zenity dialog (Pango markup, escaped;
+    process names and folders are the requester's choice — nothing hidden)."""
+    from .approve import esc as e
     lines = [f"<b>Who is asking</b> (read from the process tree, not taken on its word):",
              f"• {e(d['name'])}" + (f" — {e(d['role'])}" if d.get("role") else ""),
              f"• process {d['pid']}" + (f", started {e(d['started'])}" if d.get("started") else "")
