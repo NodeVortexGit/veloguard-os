@@ -26,7 +26,7 @@ rebind("XF86MonBrightnessDown", hl.dsp.exec_cmd("veloguard-osd brightness down")
 hl.bind("SUPER + SHIFT + T", hl.dsp.exec_cmd("veloguard-theme menu"),     { description = "Theme" })
 hl.bind("SUPER + SHIFT + SPACE", hl.dsp.exec_cmd("pkill -SIGUSR1 waybar"), { description = "Toggle top bar" })
 hl.bind("SUPER + CTRL + L",  hl.dsp.exec_cmd("loginctl lock-session"),    { description = "Lock" })
-hl.bind("SUPER + CTRL + V",  hl.dsp.exec_cmd("cliphist list | wofi --dmenu | cliphist decode | wl-copy"),
+hl.bind("SUPER + CTRL + V",  hl.dsp.exec_cmd("veloguard-session clipboard"),
         { description = "Clipboard history" })
 hl.bind("PRINT",         hl.dsp.exec_cmd('grim -g "$(slurp)" - | wl-copy && notify-send -u low "Screenshot copied"'))
 hl.bind("SHIFT + PRINT", hl.dsp.exec_cmd('grim - | wl-copy && notify-send -u low "Screenshot copied"'))

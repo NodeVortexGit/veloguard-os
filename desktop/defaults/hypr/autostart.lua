@@ -18,6 +18,10 @@ hl.on("hyprland.start", function()
   hl.exec_cmd("veloguard-session-start qs -c veloguard -n")
   hl.exec_cmd("veloguard-session-start swayosd-server")
   hl.exec_cmd("fcitx5 -d --replace")
+  -- Clipboard history (Super+Ctrl+V): nothing recorded it before, so the
+  -- history was always empty. Text and images, as they're copied.
+  hl.exec_cmd("wl-paste --type text --watch cliphist store")
+  hl.exec_cmd("wl-paste --type image --watch cliphist store")
   hl.exec_cmd('swaybg -i "$(veloguard-theme background)" -m fill')
   -- Polkit authentication agent (VPN/import/update flows raise polkit prompts)
   hl.exec_cmd("/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1")

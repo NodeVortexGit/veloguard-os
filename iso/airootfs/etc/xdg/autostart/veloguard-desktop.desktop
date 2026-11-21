@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=VeloGuard desktop
+Comment=VeloGuard's bar, quick panel and buttons on this desktop
+Exec=/usr/local/bin/veloguard-desktop-autostart
+NoDisplay=true
+# Hyprland, niri and i3 start it from their own config.
+OnlyShowIn=GNOME;XFCE;COSMIC;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Phase=Applications

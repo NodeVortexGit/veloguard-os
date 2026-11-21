@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+#
+# veloguard-session — the session actions that work differently on every
+# desktop, behind one name. The VeloGuard buttons (the bar, the quick panel,
+# the power menu, the keys) call these, so they do the same thing on Hyprland,
+# niri, COSMIC, GNOME, Xfce and i3.
+#
+#   veloguard-session de                        hyprland|niri|cosmic|gnome|xfce|i3|other
+#   veloguard-session logout | lock | suspend
+#   veloguard-session dpms on|off               screens off / on
+#   veloguard-session layout [next]             next keyboard layout (Japanese input on jp)
+#   veloguard-session screenshot [area|screen] [--file]
+#   veloguard-session nightlight toggle|on|off|status
+#   veloguard-session dnd toggle|status         do not disturb ("true"/"false")
+#   veloguard-session notifications [clear]     the notification list
+#   veloguard-session clipboard                 clipboard history
+#   veloguard-session bar toggle                show / hide the top bar
+#   veloguard-session wallpaper                 the active theme's wallpaper
+set -uo pipefail
+
+note() { notify-send -a VeloGuard -u low "${2:-VeloGuard}" "$1" 2>/dev/null || echo "$1" >&2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+RT="${XDG_RUNTIME_DIR:-/tmp}"
+
+de() {
+  if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then echo hyprland; return; fi
+  if [ -n "${NIRI_SOCKET:-}" ]; then echo niri; return; fi
+  if [ -n "${I3SOCK:-}" ]; then echo i3; return; fi
+  case "${XDG_CURRENT_DESKTOP:-}${XDG_SESSION_DESKTOP:-}" in
+    *[Hh]yprland*) echo hyprland ;;
+    *niri*)        echo niri ;;
+    *COSMIC*|*cosmic*) echo cosmic ;;
+    *GNOME*|*gnome*)   echo gnome ;;
+    *XFCE*|*xfce*)     echo xfce ;;
+    *i3*)              echo i3 ;;
+    *)                 echo other ;;
+  esac
+}
+DE="$(de)"
+
+# Our GNOME Shell extension (veloguard@veloguardos) exports the few things
+# GNOME only lets the shell itself do: open its menus, take a screenshot.
+gnome_call() {
+  gdbus call --session --dest org.gnome.Shell --object-path /io/veloguard/Shell \
+    --method "io.veloguard.Shell.$1" >/dev/null 2>&1
+}
+
+logout() {
+  case "$DE" in
+    hyprland) uwsm stop 2>/dev/null || veloguard-hypr exit ;;
+    niri)     niri msg action quit --skip-confirmation ;;
+    i3)       i3-msg exit >/dev/null ;;
+    xfce)     xfce4-session-logout --logout --fast ;;
+    gnome)    gnome-session-quit --logout --no-prompt ;;
+    cosmic)   dbus-send --session --type=method_call --dest=com.system76.CosmicSession \
+                /com/system76/CosmicSession com.system76.CosmicSession.Exit 2>/dev/null \
+                || loginctl terminate-session "${XDG_SESSION_ID:-}" ;;
+    *)        loginctl terminate-session "${XDG_SESSION_ID:-}" ;;
+  esac
+}
+
+# Every desktop here locks on logind's Lock signal: hypridle (Hyprland, niri),
+# xss-lock (i3), xfce4-screensaver (Xfce), the shell itself (GNOME, COSMIC).
+lock() { loginctl lock-session; }
+
+dpms() {
+  local how="${1:-}"
+  case "$how" in on|off) ;; *) echo "usage: veloguard-session dpms on|off" >&2; return 2 ;; esac
+  case "$DE" in
+    hyprland) veloguard-hypr dpms "$how" ;;
+    niri)     if [ "$how" = off ]; then niri msg action power-off-monitors; else niri msg action power-on-monitors 2>/dev/null || true; fi ;;
+    i3|xfce)  xset dpms force "$how" ;;
+    *)        return 0 ;;                       # GNOME / COSMIC blank by themselves
+  esac
+}
+
+# Japanese input (fcitx5 + Mozc) is on only while the jp layout is.
+fcitx_follow() {
+  have fcitx5-remote || return 0
+  if [[ ${1:-} == *apanese* || ${1:-} == jp* ]]; then fcitx5-remote -o 2>/dev/null; else fcitx5-remote -c 2>/dev/null; fi
+}
+layout_note() {
+  notify-send -a VeloGuard -u low -t 1200 -h string:x-canonical-private-synchronous:layout "Keyboard" "${1:-?}" 2>/dev/null || true
+}
+layout() {
+  local km=""
+  case "$DE" in
+    hyprland)
+      hyprctl switchxkblayout all next >/dev/null
+      sleep 0.1
+      km="$(hyprctl -j devices | python3 -c 'import json,sys; k=json.load(sys.stdin)["keyboards"]; print((next((x for x in k if x["main"]), k[0]))["active_keymap"])' 2>/dev/null)" ;;
+    niri)
+      niri msg action switch-layout next
+      sleep 0.1
+      km="$(niri msg --json keyboard-layouts 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["names"][d["current_idx"]])' 2>/dev/null)" ;;
+    cosmic)
+      busctl --user call com.system76.CosmicSettingsDaemon /com/system76/CosmicSettingsDaemon \
+        com.system76.CosmicSettingsDaemon InputSourceSwitch >/dev/null 2>&1; return 0 ;;
+    gnome)
+      gnome_call SwitchLayout || note "Super+Space switches the keyboard layout" "Keyboard"; return 0 ;;
+    i3|xfce)
+      # X11: the layouts are the groups of the X keymap (localectl
+      # set-x11-keymap us,bg); ISO_Next_Group moves to the next one.
+      if have xdotool; then xdotool key --clearmodifiers ISO_Next_Group; fi
+      return 0 ;;
+    *) return 0 ;;
+  esac
+  fcitx_follow "$km"
+  layout_note "$km"
+}
+
+screenshot() {
+  local what="area" save=0 f
+  for a in "$@"; do case "$a" in area|screen) what="$a" ;; --file) save=1 ;; esac; done
+  f="$HOME/Pictures/Screenshot-$(date +%F-%H%M%S).png"
+  mkdir -p "$HOME/Pictures"
+  case "$DE" in
+    hyprland|niri)
+      local g=()
+      if [ "$what" = area ]; then g=(-g "$(slurp)") || return 0; [ -n "${g[1]}" ] || return 0; fi
+      if [ "$save" = 1 ]; then grim "${g[@]}" "$f" && note "Saved $f" "Screenshot"
+      else grim "${g[@]}" - | wl-copy && note "Copied to the clipboard" "Screenshot"; fi ;;
+    cosmic)
+      cosmic-screenshot ;;
+    gnome)
+      gnome_call Screenshot || note "Press Print Screen" "Screenshot" ;;
+    xfce)
+      if [ "$save" = 1 ]; then xfce4-screenshooter "$([ "$what" = area ] && echo -r || echo -f)" -s "$f"
+      else xfce4-screenshooter "$([ "$what" = area ] && echo -r || echo -f)" -c; fi ;;
+    i3|*)
+      local s=(); [ "$what" = area ] && s=(-s)
+      if [ "$save" = 1 ]; then maim "${s[@]}" "$f" && note "Saved $f" "Screenshot"
+      else maim "${s[@]}" | xclip -selection clipboard -t image/png && note "Copied to the clipboard" "Screenshot"; fi ;;
+  esac
+}
+
+# Night light: a fixed warm 4000 K while on.
+NL_FLAG="$RT/veloguard-nightlight"
+nightlight_status() {
+  case "$DE" in
+    hyprland) pgrep -x hyprsunset >/dev/null && echo true || echo false ;;
+    niri|cosmic) pgrep -x wlsunset >/dev/null && echo true || echo false ;;
+    gnome)    [ "$(gsettings get org.gnome.settings-daemon.plugins.color night-light-enabled 2>/dev/null)" = true ] && echo true || echo false ;;
+    *)        [ -e "$NL_FLAG" ] && echo true || echo false ;;
+  esac
+}
+nightlight_set() {   # on|off
+  local on="$1"
+  case "$DE" in
+    hyprland)
+      if [ "$on" = on ]; then pgrep -x hyprsunset >/dev/null || setsid -f hyprsunset -t 4000 >/dev/null 2>&1
+      else pkill -x hyprsunset; fi ;;
+    niri|cosmic)
+      if [ "$on" = on ]; then
+        pgrep -x wlsunset >/dev/null && return 0
+        have wlsunset || { note "Night light needs wlsunset" "Night light"; return 1; }
+        setsid -f wlsunset -t 4000 -T 4001 >/dev/null 2>&1
+        sleep 1
+        pgrep -x wlsunset >/dev/null || note "This desktop doesn't let apps tint the screen" "Night light"
+      else pkill -x wlsunset; fi ;;
+    gnome)
+      if [ "$on" = on ]; then
+        gsettings set org.gnome.settings-daemon.plugins.color night-light-schedule-automatic false
+        gsettings set org.gnome.settings-daemon.plugins.color night-light-schedule-from 0.0
+        gsettings set org.gnome.settings-daemon.plugins.color night-light-schedule-to 23.99
+        gsettings set org.gnome.settings-daemon.plugins.color night-light-enabled true
+      else gsettings set org.gnome.settings-daemon.plugins.color night-light-enabled false; fi ;;
+    *)   # X11: gammastep sets the colour ramps once; they stay until reset
+      have gammastep || { note "Night light needs gammastep" "Night light"; return 1; }
+      if [ "$on" = on ]; then gammastep -m randr -P -O 4000 >/dev/null 2>&1 && : > "$NL_FLAG"
+      else gammastep -m randr -x >/dev/null 2>&1; rm -f "$NL_FLAG"; fi ;;
+  esac
+}
+nightlight() {
+  case "${1:-toggle}" in
+    status) nightlight_status ;;
+    on|off) nightlight_set "$1" ;;
+    toggle) if [ "$(nightlight_status)" = true ]; then nightlight_set off; else nightlight_set on; fi ;;
+  esac
+}
+
+COSMIC_DND="$HOME/.config/cosmic/com.system76.CosmicNotifications/v1/do_not_disturb"
+dnd_status() {
+  case "$DE" in
+    hyprland|niri) [ "$(swaync-client -D 2>/dev/null)" = true ] && echo true || echo false ;;
+    i3)     [ "$(dunstctl is-paused 2>/dev/null)" = true ] && echo true || echo false ;;
+    xfce)   [ "$(xfconf-query -c xfce4-notifyd -p /do-not-disturb 2>/dev/null)" = true ] && echo true || echo false ;;
+    gnome)  [ "$(gsettings get org.gnome.desktop.notifications show-banners 2>/dev/null)" = false ] && echo true || echo false ;;
+    cosmic) [ "$(cat "$COSMIC_DND" 2>/dev/null)" = true ] && echo true || echo false ;;
+    *)      echo false ;;
+  esac
+}
+dnd() {
+  [ "${1:-toggle}" = status ] && { dnd_status; return; }
+  local now; now="$(dnd_status)"
+  case "$DE" in
+    hyprland|niri) swaync-client -d -sw >/dev/null ;;
+    i3)     dunstctl set-paused toggle ;;
+    xfce)   xfconf-query -c xfce4-notifyd -p /do-not-disturb -n -t bool -s "$([ "$now" = true ] && echo false || echo true)" ;;
+    gnome)  gsettings set org.gnome.desktop.notifications show-banners "$now" ;;
+    cosmic) mkdir -p "$(dirname "$COSMIC_DND")"
+            if [ "$now" = true ]; then echo false > "$COSMIC_DND"; else echo true > "$COSMIC_DND"; fi ;;
+  esac
+}
+
+# dunst keeps a history but has no window for it: show it as a menu.
+dunst_history() {
+  local rows pick
+  rows="$(dunstctl history 2>/dev/null | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)["data"][0]
+except Exception:
+    data = []
+for n in data[:30]:
+    app = n.get("appname", {}).get("data", "")
+    summ = n.get("summary", {}).get("data", "").replace("\n", " ")
+    body = n.get("body", {}).get("data", "").replace("\n", " ")
+    nid = n.get("id", {}).get("data", "")
+    print(f"{summ} — {body[:70]}  · {app}  [{nid}]")
+')"
+  pick="$(printf '%s\n' ${rows:+"$rows"} "Clear all" "Do not disturb: $( [ "$(dnd_status)" = true ] && echo on || echo off )" \
+          | veloguard-dmenu -p "Notifications" --width 560 --height 420)" || return 0
+  case "$pick" in
+    "Clear all") dunstctl history-clear ;;
+    "Do not disturb:"*) dnd toggle ;;
+    *"["*"]") dunstctl history-pop "$(sed -n 's/.*\[\([0-9]*\)\]$/\1/p' <<<"$pick")" ;;
+  esac
+}
+notifications() {
+  case "$DE:${1:-}" in
+    hyprland:clear|niri:clear) swaync-client -C -sw ;;
+    hyprland:*|niri:*) swaync-client -t -sw ;;
+    i3:clear) dunstctl close-all ;;
+    i3:*)     dunst_history ;;
+    gnome:*)  gnome_call ShowNotifications ;;
+    xfce:*)   xfce4-notifyd-config >/dev/null 2>&1 & ;;
+    cosmic:*) note "Your notifications are under the bell in the dock" "Notifications" ;;
+  esac
+}
+
+clipboard() {
+  case "$DE" in
+    hyprland|niri|cosmic)
+      cliphist list | veloguard-dmenu -p "Clipboard" --width 560 --height 420 | cliphist decode | wl-copy ;;
+    xfce) xfce4-clipman-history >/dev/null 2>&1 || note "Clipboard history needs the Clipman plugin" "Clipboard" ;;
+    *)    note "No clipboard history on this desktop" "Clipboard" ;;
+  esac
+}
+
+bar() {
+  case "$DE" in
+    hyprland|niri|cosmic) pkill -SIGUSR1 -x waybar ;;
+    i3)   polybar-msg cmd toggle >/dev/null ;;
+    *)    return 0 ;;
+  esac
+}
+
+wallpaper() {
+  local bg; bg="$(veloguard-theme background 2>/dev/null)"; [ -r "$bg" ] || return 0
+  case "$DE" in
+    hyprland|niri)
+      pkill -x swaybg 2>/dev/null; setsid -f swaybg -i "$bg" -m fill >/dev/null 2>&1 ;;
+    i3)  feh --no-fehbg --bg-fill "$bg" ;;
+    xfce)
+      local p
+      for p in $(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep -E '/last-image$'); do
+        xfconf-query -c xfce4-desktop -p "$p" -s "$bg"
+      done
+      # No monitor known yet (first login): the one xfdesktop starts with
+      xfconf-query -c xfce4-desktop -l 2>/dev/null | grep -q last-image \
+        || xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitor0/workspace0/last-image -n -t string -s "$bg" ;;
+    gnome)
+      gsettings set org.gnome.desktop.background picture-uri "file://$bg"
+      gsettings set org.gnome.desktop.background picture-uri-dark "file://$bg" ;;
+    cosmic)
+      local d="$HOME/.config/cosmic/com.system76.CosmicBackground/v1"
+      mkdir -p "$d"
+      printf '(\n    output: "all",\n    source: Path("%s"),\n    filter_by_theme: false,\n    rotation_frequency: 300,\n    filter_method: Lanczos,\n    scaling_mode: Zoom,\n    sampling_method: Alphanumeric,\n)\n' "$bg" > "$d/all"
+      echo true > "$d/same-on-all" ;;
+  esac
+}
+
+case "${1:-}" in
+  de)            echo "$DE" ;;
+  logout)        logout ;;
+  lock)          lock ;;
+  suspend)       systemctl suspend ;;
+  dpms)          dpms "${2:-}" ;;
+  layout)        layout ;;
+  screenshot)    shift; screenshot "$@" ;;
+  nightlight)    nightlight "${2:-toggle}" ;;
+  dnd)           dnd "${2:-toggle}" ;;
+  notifications) notifications "${2:-}" ;;
+  clipboard)     clipboard ;;
+  bar)           bar ;;
+  wallpaper)     wallpaper ;;
+  *) sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

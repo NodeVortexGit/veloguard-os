@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# veloguard-powermenu — Hyprland power menu (wofi). Ports the GNOME end-session
+# veloguard-powermenu — the power menu on every desktop (veloguard-dmenu; log
+# out and lock through veloguard-session). Ports the GNOME end-session
 # dialog, including the "Update VeloGuardOS on restart" option, which arms the
 # staged offline kernel update via the SAME privileged helper the GNOME
 # extension used (veloguard-arm-offline-update, guarded by its polkit rule).
@@ -9,7 +10,7 @@ set -euo pipefail
 PENDING="${VELOGUARD_PENDING:-/var/lib/veloguard/staged-kernel/pending.json}"
 ARM="${VELOGUARD_ARM:-veloguard-arm-offline-update}"
 
-menu() { wofi --dmenu --width 340 --height 300 -p "$1"; }
+menu() { veloguard-dmenu -p "$1" --width 340 --height 300; }
 
 # Build the entry list; add "Reboot & Update" only when an update is staged.
 entries=$'Lock\nSuspend\nLog out\nReboot\nShut down'
@@ -22,9 +23,9 @@ fi
 choice="$(printf '%s\n' "$entries" | menu "⏻ Power")" || exit 0
 
 case "$choice" in
-  Lock)      loginctl lock-session ;;
+  Lock)      veloguard-session lock ;;
   Suspend)   systemctl suspend ;;
-  "Log out") uwsm stop 2>/dev/null || veloguard-hypr exit ;;
+  "Log out") veloguard-session logout ;;
   Reboot)    systemctl reboot ;;
   "Shut down") systemctl poweroff ;;
   "Reboot & Update"*)

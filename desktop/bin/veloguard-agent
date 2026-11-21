@@ -40,6 +40,12 @@ BUILTIN=(claude ollama)
 
 vg() { command veloguard "$@"; }                 # the guard CLI (on PATH)
 note() { command -v notify-send >/dev/null 2>&1 && notify-send "VeloGuard agent" "$1" || echo "$1" >&2; }
+# A desktop session (any of them): menus go through veloguard-dmenu, which
+# picks wofi, rofi or zenity for this desktop.
+graphical() { { [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; } && command -v veloguard-dmenu >/dev/null 2>&1; }
+# The clipboard, on Wayland or X11.
+clip_get() { if [ -n "${WAYLAND_DISPLAY:-}" ]; then wl-paste -n 2>/dev/null; else xclip -o -selection clipboard 2>/dev/null; fi; }
+clip_put() { if [ -n "${WAYLAND_DISPLAY:-}" ]; then wl-copy 2>/dev/null; else xclip -selection clipboard 2>/dev/null; fi; }
 
 # Agent plugins as TSV: name label installed(1/0) signed-in(1/0) bin signin
 plugins_tsv() {
@@ -117,13 +123,13 @@ recent_errors() {
 
 installed_agents() { plugins_tsv | awk -F'\t' '$3 == "1" { print $1 "\t" $2 }'; }
 
-pick_agent() {   # an installed agent: the default first; wofi on a desktop
+pick_agent() {   # an installed agent: the default first; a menu on a desktop
   local def rows choice
   def="$(get_default)"
   rows="$(installed_agents | awk -F'\t' -v d="$def" '{ print ($1 == d ? "0" : "1") "\t" $1 "\t" $2 }' | sort | cut -f2-)"
   [ -n "$rows" ] || { note "No AI agent is installed — veloguard-agent install codex"; return 1; }
-  if command -v wofi >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ] && [ "$(printf '%s\n' "$rows" | wc -l)" -gt 1 ]; then
-    choice="$(printf '%s\n' "$rows" | awk -F'\t' '{ printf "%-12s %s\n", $1, $2 }' | wofi --dmenu --width 420 --height 300 -p 'Send it to which agent?')" || return 1
+  if graphical && [ "$(printf '%s\n' "$rows" | wc -l)" -gt 1 ]; then
+    choice="$(printf '%s\n' "$rows" | awk -F'\t' '{ printf "%-12s %s\n", $1, $2 }' | veloguard-dmenu --width 420 --height 300 -p 'Send it to which agent?')" || return 1
     printf '%s\n' "${choice%% *}"
   else
     printf '%s\n' "$rows" | head -1 | cut -f1
@@ -144,9 +150,9 @@ ask_agent() {
     esac
   done
   [ -n "$text" ] || [ -n "$src" ] || [ -t 0 ] || text="$(cat)"
-  if [ -z "$text" ] && [ -z "$src" ] && command -v wofi >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  if [ -z "$text" ] && [ -z "$src" ] && graphical; then
     case "$(printf '%s\n' "Text I copied (clipboard)" "Recent system errors" "Latest security incident" \
-            | wofi --dmenu --width 420 --height 220 -p 'Ask an AI agent about…')" in
+            | veloguard-dmenu --width 420 --height 220 -p 'Ask an AI agent about…')" in
       "Text I copied"*)   src=clipboard ;;
       "Recent system"*)   src=errors ;;
       "Latest security"*) kind=incident; src=incident:latest ;;
@@ -154,7 +160,7 @@ ask_agent() {
     esac
   fi
   case "$src" in
-    clipboard)  text="$(wl-paste -n 2>/dev/null || true)" ;;
+    clipboard)  text="$(clip_get || true)" ;;
     errors)     text="$(recent_errors)" ;;
     incident:*) text="$(vg incidents --show "${src#incident:}" 2>/dev/null || true)"
                 [ -n "$text" ] || { note "No incident to investigate — the guard hasn't caught anything"; return 1; } ;;
@@ -167,7 +173,7 @@ ask_agent() {
   clip="$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["clipboard"] or "", end="")')"
   mapfile -d '' -t argv < <(printf '%s' "$json" | python3 -c 'import json,sys; sys.stdout.write("\0".join(json.load(sys.stdin)["argv"]) + "\0")')
   if [ -n "$clip" ]; then
-    printf '%s' "$clip" | wl-copy 2>/dev/null && note "$label opens next — paste the request with Ctrl+Shift+V"
+    printf '%s' "$clip" | clip_put && note "$label opens next — paste the request with Ctrl+Shift+V"
   fi
   cd "$HOME"
   term_exec env "PATH=$SHIM_DIR:$HOME/.local/bin:$PATH" "VELOGUARD_AGENT=$label" \
@@ -179,7 +185,7 @@ pick() {
   rows="$( { printf 'claude\tClaude API (in the guard)\n'; printf 'ollama\tOllama — local model\n'
              plugins_tsv | awk -F'\t' '{ printf "%s\t%s%s\n", $1, $2, ($3 == "1" ? "" : " — not installed") }'; } )"
   choice="$(printf '%s\n' "$rows" | awk -F'\t' '{ printf "%-12s %s\n", $1, $2 }' \
-            | wofi --dmenu --width 460 --height 340 -p 'VeloGuard agent brain')" || return 1
+            | veloguard-dmenu --width 460 --height 340 -p 'VeloGuard agent brain')" || return 1
   name="${choice%% *}"
   valid_brain "$name" || return 1
   set_default "$name"; note "Default agent → $name"
@@ -211,10 +217,10 @@ case "${1:-}" in
   -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
-# Resolve the brain: the stored default, else pick one (wofi in a desktop).
+# Resolve the brain: the stored default, else pick one (a menu on a desktop).
 brain="$(get_default)"
 if [ -z "$brain" ]; then
-  if command -v wofi >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  if graphical; then
     brain="$(pick)" || exit 0
   else
     echo "no default agent brain — run: veloguard-agent set <brain>  (veloguard-agent list)" >&2

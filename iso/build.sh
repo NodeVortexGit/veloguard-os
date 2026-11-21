@@ -94,6 +94,10 @@ cp -r "$REPO/desktop/defaults" "$PROFILE/airootfs/usr/share/veloguard/desktop"
 cp -r "$REPO/desktop/themes"   "$PROFILE/airootfs/usr/share/veloguard/themes"
 cp -r "$REPO/desktop/hardware" "$PROFILE/airootfs/usr/share/veloguard/hardware"
 cp -r "$REPO/desktop/agents"   "$PROFILE/airootfs/usr/share/veloguard/agents"
+# VeloGuard's GNOME Shell extension (its buttons on GNOME). Inert until a GNOME
+# install enables it (calamares-desktop.sh writes the dconf defaults).
+install -d "$PROFILE/airootfs/usr/share/gnome-shell/extensions"
+cp -r "$REPO/desktop/defaults/gnome/veloguard@veloguardos" "$PROFILE/airootfs/usr/share/gnome-shell/extensions/"
 # The desktop package set, so a headless install knows what to remove.
 install -Dm644 "$REPO/desktop/packages.desktop" "$PROFILE/airootfs/usr/share/veloguard/packages.desktop"
 cp -r "$REPO/desktop/skel/.config/." "$PROFILE/airootfs/etc/skel/.config/"

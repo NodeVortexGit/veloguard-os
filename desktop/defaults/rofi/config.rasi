@@ -1,0 +1,10 @@
+/* VeloGuardOS rofi — yours to edit. The look: the VeloGuard theme below. */
+configuration {
+    modi: "drun,run,window";
+    show-icons: true;
+    drun-display-format: "{name}";
+    display-drun: "Apps";
+    display-run: "Run";
+    display-window: "Windows";
+}
+@theme "/usr/share/veloguard/desktop/rofi/veloguard.rasi"

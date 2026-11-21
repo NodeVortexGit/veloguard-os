@@ -1,0 +1,8 @@
+{
+  "uuid": "veloguard@veloguardos",
+  "name": "VeloGuard",
+  "description": "VeloGuardOS on GNOME: the guard (VPN providers, network trust, AI agents, Bulgarian Mode) and AI plan usage in the top bar; VPN, Trusted network and Bulgarian Mode in quick settings; \"Update VeloGuardOS on restart\" in the restart dialog.",
+  "shell-version": ["47", "48", "49", "50", "51", "52"],
+  "url": "https://github.com/NodeVortexGit/veloguard-os",
+  "version": 2
+}

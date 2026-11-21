@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# veloguard-polybar — (re)start the VeloGuard top bar on i3: one polybar per
+# monitor, with this machine's battery / AC adapter filled in and the modules
+# it has no hardware for left out (no battery on a desktop PC, no Wi-Fi on a
+# wired box). Config: ~/.config/polybar/config.ini (VeloGuard's, yours to
+# edit), else the shipped one.
+set -u
+CFG="$HOME/.config/polybar/config.ini"
+[ -r "$CFG" ] || CFG=/usr/share/veloguard/desktop/polybar/config.ini
+pkill -u "$(id -u)" -x polybar 2>/dev/null
+while pgrep -u "$(id -u)" -x polybar >/dev/null; do sleep 0.2; done
+
+bat=""; adp=""
+for d in /sys/class/power_supply/*; do
+  [ -r "$d/type" ] || continue
+  case "$(cat "$d/type")" in
+    Battery) [ "$(cat "$d/scope" 2>/dev/null)" = Device ] || { [ -z "$bat" ] && bat="${d##*/}"; } ;;
+    Mains)   [ -z "$adp" ] && adp="${d##*/}" ;;
+  esac
+done
+wifi=""; wired=""
+for d in /sys/class/net/*; do
+  n="${d##*/}"; [ "$n" = lo ] && continue
+  if [ -d "$d/wireless" ] || [ -d "$d/phy80211" ]; then wifi=1
+  elif [ -e "$d/device" ]; then wired=1; fi
+done
+
+mods="ai-usage guard xkeyboard"
+[ -n "$wifi" ] && mods="$mods wifi"
+[ -n "$wired" ] && mods="$mods wired"
+[ -z "$wifi$wired" ] && mods="$mods wifi"
+mods="$mods bluetooth pulseaudio backlight power-profile"
+[ -n "$bat" ] && mods="$mods battery"
+mods="$mods tray notifications quickpanel"
+
+export VG_MODULES="$mods" VG_BAT="${bat:-BAT0}" VG_ADP="${adp:-AC}"
+mapfile -t mons < <(polybar --list-monitors 2>/dev/null | cut -d: -f1)
+[ ${#mons[@]} -gt 0 ] || mons=("")
+for i in "${!mons[@]}"; do
+  # the tray only on the first bar (one tray per X screen)
+  m="$mods"; [ "$i" -gt 0 ] && m="${mods/ tray/}"
+  MONITOR="${mons[$i]}" VG_MODULES="$m" setsid -f veloguard-session-start polybar -c "$CFG" veloguard >/dev/null 2>&1 < /dev/null
+done
+exit 0

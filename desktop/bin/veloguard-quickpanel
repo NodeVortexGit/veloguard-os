@@ -3,8 +3,18 @@
 # /etc/xdg/quickshell/veloguard): toggles, sliders, media, AI plan usage.
 # Super alone and the bar's 󰒓 open it; --usage (the bar's AI-usage button)
 # opens it scrolled to the usage bars. Notifications are separate: the bell
-# and Super+N (swaync).
+# and Super+N.
+#
+# Hyprland, niri and COSMIC show it as a layer over the screen; i3 and Xfce as
+# an X11 panel window. GNOME has its own quick settings, which VeloGuard's
+# GNOME Shell extension fills with the same toggles (and the AI usage).
 fn=toggle; [ "${1:-}" = --usage ] && fn=usage
+if [ "$(veloguard-session de 2>/dev/null)" = gnome ]; then
+  m=ShowQuickSettings; [ "$fn" = usage ] && m=ShowUsage
+  gdbus call --session --dest org.gnome.Shell --object-path /io/veloguard/Shell \
+    --method "io.veloguard.Shell.$m" >/dev/null 2>&1 && exit 0
+  exec veloguard-guard-menu
+fi
 qs -c veloguard ipc call panel "$fn" >/dev/null 2>&1 && exit 0
 # not running yet (the first seconds of a session, or it crashed): start it
 setsid -f qs -c veloguard -n >/dev/null 2>&1

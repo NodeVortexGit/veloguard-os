@@ -75,19 +75,19 @@ Pane {
     ListModel {
         id: desktops
         ListElement { key: "cleanconfig"; name: "Clean Config — Hyprland"; tag: "NodeVortex's rice · Dynamic Island"
-            note: "NodeVortex's rice: the Dynamic Island shell, black + dark-blue glass, installed exactly as published — every keybind included. Built from source during install (needs internet, ~15 min). Recommended on laptops." }
+            note: "NodeVortex's rice: the Dynamic Island shell, black + dark-blue glass, installed exactly as published — every keybind included. VeloGuard's own buttons (VPN, network trust, the guard, AI agent, AI usage) sit in its quick panel. Built from source during install (needs internet, ~15 min). Recommended on laptops." }
         ListElement { key: "hyprland"; name: "VeloGuard Hyprland"; tag: "tiling · guard bar · works offline"
             note: "The default tiling desktop: Waybar with the guard shield, VPN and Wi-Fi trust built in, navy + cyan theme. Already on the disc — works offline." }
         ListElement { key: "gnome"; name: "GNOME"; tag: "polished · overview · gestures"
-            note: "Full, polished desktop: Activities overview, its own settings and software centre, touchpad gestures." }
+            note: "Full, polished desktop: Activities overview, its own settings and software centre, touchpad gestures. VeloGuard's buttons join its top bar and quick settings: the guard, VPN, network trust, AI usage." }
         ListElement { key: "xfce"; name: "Xfce"; tag: "classic panel + menu · light"
-            note: "Light, traditional desktop: a panel with menu, task list and clock; desktop icons. Great on older hardware." }
+            note: "Light, traditional desktop: a panel with menu, task list and clock; desktop icons. Great on older hardware. The panel carries every VeloGuard button: the guard, AI usage, Wi-Fi, Bluetooth, the quick panel." }
         ListElement { key: "niri"; name: "niri"; tag: "scrollable tiling"
-            note: "Scrollable-tiling Wayland compositor: windows sit in columns on an endless horizontal strip you scroll through." }
+            note: "Scrollable-tiling Wayland compositor: windows sit in columns on an endless horizontal strip you scroll through. Same VeloGuard bar, quick panel and frosted look as VeloGuard Hyprland." }
         ListElement { key: "i3"; name: "i3"; tag: "keyboard tiling · X11"
-            note: "Classic keyboard-driven tiling window manager (X11): every window tiled, i3bar at the bottom." }
+            note: "Classic keyboard-driven tiling window manager (X11): every window tiled. VeloGuard's top bar (polybar) with every button, its quick panel and menus." }
         ListElement { key: "cosmic"; name: "COSMIC"; tag: "System76 · panel + dock"
-            note: "System76's Rust desktop: top panel, dock, tiling or floating windows — modern and fast." }
+            note: "System76's Rust desktop: dock, tiling or floating windows — modern and fast. VeloGuard's top bar takes the place of COSMIC's top panel, with every button." }
         ListElement { key: "headless"; name: "Headless — no desktop"; tag: "text login · servers & VMs"
             note: "Boots to a text login: no display manager, no desktop. The guard, VPN, Wi-Fi auto-protect, drivers and Ollama still install." }
     }

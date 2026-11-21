@@ -18,11 +18,30 @@ if pgrep -x swayosd-server >/dev/null; then
   { pkill -x swayosd-server; sleep 0.3; setsid -f swayosd-server >/dev/null 2>&1; } &
 fi
 case "$what $how" in
-  "volume up")       exec wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;;
-  "volume down")     exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;;
-  "volume mute")     exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
-  "mic mute")        exec wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle ;;
-  "brightness up")   exec brightnessctl -q s 5%+ ;;
-  "brightness down") exec brightnessctl -q s 5%- ;;
+  "volume up")       wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;;
+  "volume down")     wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;;
+  "volume mute")     wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
+  "mic mute")        wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle ;;
+  "brightness up")   brightnessctl -q s 5%+ ;;
+  "brightness down") brightnessctl -q s 5%- ;;
   *) echo "usage: veloguard-osd volume|mic|brightness up|down|mute" >&2; exit 2 ;;
 esac
+# No pop-up program (X11 desktops: i3, Xfce — swayosd is Wayland-only): show
+# the level as a notification that replaces itself (dunst / xfce4-notifyd
+# draw the progress bar from the "value" hint).
+pgrep -x swayosd-server >/dev/null && exit 0
+case "$what" in
+  volume)
+    v="$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null)"
+    pct="$(awk '{printf "%d", $2 * 100}' <<<"$v")"; title="Volume"
+    [[ $v == *MUTED* ]] && title="Volume (muted)" ;;
+  mic)
+    v="$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null)"
+    pct="$(awk '{printf "%d", $2 * 100}' <<<"$v")"; title="Microphone"
+    [[ $v == *MUTED* ]] && title="Microphone (muted)" ;;
+  brightness)
+    pct="$(brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%')"; title="Brightness" ;;
+esac
+notify-send -a VeloGuard -u low -t 1200 -h "int:value:${pct:-0}" \
+  -h string:x-canonical-private-synchronous:veloguard-osd -h string:x-dunst-stack-tag:veloguard-osd \
+  "$title" "${pct:-0}%" 2>/dev/null || true

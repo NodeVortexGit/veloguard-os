@@ -3,7 +3,7 @@
 # security, which one you're on, whether VeloGuard trusts it), connect —
 # asking for the password if it's new —, Wi-Fi on/off, the full settings.
 set -uo pipefail
-menu() { wofi --dmenu --insensitive --width 460 --height 420 -p "$1"; }
+menu() { veloguard-dmenu -p "$1" --width 460 --height 420; }
 note() { notify-send -a VeloGuard -u low "Wi-Fi" "$1" 2>/dev/null || true; }
 TRUSTED=/var/lib/veloguard/trusted-ssids
 radio="$(nmcli -t radio wifi 2>/dev/null)"
@@ -50,7 +50,7 @@ if nmcli -t -f NAME connection show | grep -Fxq -- "$ssid"; then
 fi
 pw=""
 if [[ $choice != *"󰦞"* ]]; then
-  pw="$(wofi --dmenu --password --width 420 --height 80 -p "Password for $ssid" </dev/null)" || exit 0
+  pw="$(veloguard-dmenu --password -p "Password for $ssid" --width 420)" || exit 0
 fi
 if [ -n "$pw" ]; then out="$(nmcli device wifi connect "$ssid" password "$pw" 2>&1)"; else out="$(nmcli device wifi connect "$ssid" 2>&1)"; fi
 case "$out" in *successfully*) note "Connected to $ssid" ;; *) note "Couldn't connect to $ssid: ${out##*: }" ;; esac

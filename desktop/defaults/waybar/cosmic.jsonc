@@ -1,0 +1,24 @@
+// VeloGuardOS Waybar on COSMIC — the same bar as on VeloGuard Hyprland, in
+// place of COSMIC's top panel (COSMIC keeps its dock, with its notification
+// bell). Module settings come from your ~/.config/waybar/config.jsonc; only
+// the lists differ: workspaces through ext-workspace, the keyboard-layout
+// button switches COSMIC's input source, and the bell lives in the dock
+// (COSMIC's own notification centre).
+{
+  "include": ["~/.config/waybar/config.jsonc"],
+  "modules-left": ["custom/veloguard", "ext/workspaces"],
+  "modules-center": ["clock"],
+  "modules-right": [
+    "custom/ai-usage",
+    "custom/guard",
+    "custom/layout",
+    "network",
+    "bluetooth",
+    "pulseaudio",
+    "backlight",
+    "power-profiles-daemon",
+    "battery",
+    "group/tray-expander",
+    "custom/quickpanel"
+  ]
+}

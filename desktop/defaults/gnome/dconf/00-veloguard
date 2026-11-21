@@ -1,0 +1,60 @@
+# VeloGuardOS on GNOME — system defaults (anyone's own setting still wins).
+# Installed to /etc/dconf/db/local.d/ with the profile /etc/dconf/profile/user;
+# `dconf update` compiles them.
+
+[org/gnome/shell]
+# VeloGuard's buttons + the tray (AppIndicator / StatusNotifier icons)
+enabled-extensions=['veloguard@veloguardos', 'appindicatorsupport@rgcjonas.gmail.com']
+
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+accent-color='blue'
+clock-show-weekday=true
+monospace-font-name='JetBrainsMono Nerd Font 10'
+
+[org/gnome/desktop/background]
+picture-uri='file:///usr/share/backgrounds/veloguard/default.png'
+picture-uri-dark='file:///usr/share/backgrounds/veloguard/default.png'
+picture-options='zoom'
+
+[org/gnome/desktop/screensaver]
+picture-uri='file:///usr/share/backgrounds/veloguard/default.png'
+
+[org/gnome/desktop/wm/preferences]
+button-layout='appmenu:minimize,maximize,close'
+
+# VeloGuard's keys (the same ones as on the other desktops, where GNOME
+# doesn't already have its own for the job: Super+S quick settings, Super+V
+# notifications, Super+L lock, Super+Space keyboard layout)
+[org/gnome/settings-daemon/plugins/media-keys]
+custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-guard/', '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-vpn/', '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-agent/', '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-ask/', '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-usage/', '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-search/']
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-guard]
+name='VeloGuard: guard menu'
+command='gdbus call --session --dest org.gnome.Shell --object-path /io/veloguard/Shell --method io.veloguard.Shell.ShowGuardMenu'
+binding='<Shift><Super>g'
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-vpn]
+name='VeloGuard: VPN'
+command='gdbus call --session --dest org.gnome.Shell --object-path /io/veloguard/Shell --method io.veloguard.Shell.ShowVpnMenu'
+binding='<Shift><Super>v'
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-agent]
+name='VeloGuard: AI agent'
+command='veloguard-agent'
+binding='<Shift><Super>a'
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-ask]
+name='VeloGuard: ask an AI agent about an error'
+command='veloguard-agent ask'
+binding='<Shift><Super>e'
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-usage]
+name='VeloGuard: AI plan usage'
+command='gdbus call --session --dest org.gnome.Shell --object-path /io/veloguard/Shell --method io.veloguard.Shell.ShowUsage'
+binding='<Shift><Super>u'
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/veloguard-search]
+name='Search (Albert)'
+command='albert toggle'
+binding='<Super>r'

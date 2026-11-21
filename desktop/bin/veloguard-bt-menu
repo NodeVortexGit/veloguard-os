@@ -2,7 +2,7 @@
 # veloguard-bt-menu — Bluetooth from the bar: on/off, your paired devices
 # (connect / disconnect, battery when the device reports it), pair a new one.
 set -uo pipefail
-menu() { wofi --dmenu --insensitive --width 440 --height 380 -p "$1"; }
+menu() { veloguard-dmenu -p "$1" --width 440 --height 380; }
 note() { notify-send -a VeloGuard -u low "Bluetooth" "$1" 2>/dev/null || true; }
 if ! bluetoothctl show 2>/dev/null | grep -q 'Powered: yes'; then
   case "$(printf '%s\n' "Turn Bluetooth on" "Bluetooth settings…" | menu 'Bluetooth is off')" in

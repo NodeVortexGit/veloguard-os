@@ -28,7 +28,10 @@
 #
 # The config is deployed AS-IS: the repo's Hyprland config lands byte-for-byte
 # — every keybind, monitor line, look and autostart exactly as in the repo.
-# Nothing VeloGuard is merged into it. Hyprland 0.57+ reads only
+# Nothing VeloGuard is merged into it. The one addition: VeloGuard's own
+# buttons (VPN, network trust, guard menu, AI agent, AI usage) fitted into the
+# island's quick panel next to Focus / Airplane, in its own styles
+# (veloguard-clean-config-buttons). Hyprland 0.57+ reads only
 # .config/hypr/hyprland.lua: until the repo ships one, VeloGuard Hyprland stays
 # and Clean Config stays pending (exit 1). Idempotent; re-run any time.
 # Log: /var/log/veloguard-clean-config.log
@@ -176,6 +179,10 @@ build_system() {
     cmake --install build
   )
   say "shell installed (revision ${rev:0:12})"
+  # VeloGuard's own buttons (VPN, network trust, the guard menu, the AI agent,
+  # AI plan usage) into the shell's quick panel, next to Focus / Airplane —
+  # the only addition; Clean Config is otherwise exactly as published.
+  "$(dirname "$(readlink -f "$0")")/veloguard-clean-config-buttons" /etc/xdg/quickshell/caelestia || true
 
   # Optional: Albert (the config's launcher). A failure here is not fatal: the
   # shim below takes its name, so `albert toggle` (Super+Alt, $menu) and the
@@ -265,8 +272,10 @@ deploy() {
   chmod +x "$home/.config/hypr/scripts/close-workspace.sh" 2>/dev/null || true
   # The repo's Hyprland config (hyprland.lua, or hyprland.conf before 0.57) is
   # NOT edited: keybinds, monitor, look and autostart stay exactly as in the
-  # repo. (The VeloGuard guard menu is still one command away —
-  # veloguard-guard-menu — it just has no key here.)
+  # repo. VeloGuard's buttons live in the island's quick panel instead (Meta,
+  # or click the pill): VPN, Trusted, Guard, AI agent, AI usage — an install
+  # built before they existed gets them here.
+  "$(dirname "$(readlink -f "$0")")/veloguard-clean-config-buttons" /etc/xdg/quickshell/caelestia || true
 
   # SDDM: open the Hyprland session for this user by default.
   install -d -o sddm -g sddm /var/lib/sddm 2>/dev/null || install -d /var/lib/sddm

@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""veloguard-bar — the VeloGuard bar's status buttons for bars that aren't
+Waybar: polybar (i3) and the Xfce panel's Generic Monitor. Same sources, same
+colours as the Waybar modules, so every desktop shows the same buttons.
+
+  veloguard-bar MODULE [--polybar | --genmon | --plain]
+
+  guard          VPN / network trust / staged update / root grant (veloguard-waybar-guard)
+  ai-usage       AI plan usage (veloguard-ai-usage --waybar)
+  bluetooth      on / off / connected devices
+  network        Wi-Fi signal, wired, or disconnected
+  power-profile  power-profiles-daemon's profile
+  backlight      screen brightness
+  notifications  the bell: dunst's count / do not disturb (i3)
+  veloguard | quickpanel | power   the plain buttons (genmon only)
+  panel-state    everything at once as JSON (Clean Config's quick panel)
+
+--genmon output carries its own click command; polybar's clicks are in the
+polybar config. Everything shown is escaped for the bar's markup: the guard's
+tooltip carries the Wi-Fi's name, which whoever runs the access point picks —
+unescaped, a name like "</tool><txtclick>…" would plant a click command.
+"""
+from __future__ import annotations
+
+import html
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+THEME = os.path.expanduser("~/.config/veloguard/current/waybar.css")
+DEFAULTS = {"foreground": "#d8dcea", "accent": "#3b5bd9", "accent2": "#6b9bff", "muted": "#6a7290",
+            "ok": "#7ee0a8", "warn": "#f2c66d", "alert": "#f26d7d", "solid": "#0a0a12"}
+
+
+def colors() -> dict:
+    c = dict(DEFAULTS)
+    try:
+        with open(THEME, encoding="utf-8") as f:
+            for name, value in re.findall(r"@define-color\s+([\w-]+)\s+(#[0-9a-fA-F]{6})\s*;", f.read()):
+                c[name] = value
+    except OSError:
+        pass
+    return c
+
+
+def run(*cmd: str, timeout: float = 8) -> str:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def waybar_json(*cmd: str) -> dict:
+    try:
+        return json.loads(run(*cmd, timeout=20) or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+
+def plain_text(markup: str) -> str:
+    """Pango markup (the Waybar tooltips) → plain text."""
+    return html.unescape(re.sub(r"<[^>]+>", "", markup or ""))
+
+
+# ── the modules: each returns (text, colour-key or None, tooltip, click) ──────
+def m_guard():
+    d = waybar_json("veloguard-waybar-guard")
+    cls = d.get("class", "ok")
+    colour = {"vpn-up": "ok", "untrusted": "warn", "update": "warn", "alert": "alert", "grant": "alert"}.get(cls)
+    return d.get("text", "🛡"), colour, plain_text(d.get("tooltip", "")), "veloguard-guard-menu"
+
+
+AGENT_NAMES = {"claude-code": "Claude", "codex": "Codex", "kimi": "Kimi"}
+
+
+def m_ai_usage():
+    d = waybar_json("veloguard-ai-usage", "--waybar")
+    cls = d.get("class", [])
+    cls = cls if isinstance(cls, list) else [cls]
+    text = d.get("text", "󰚩")
+    agent = next((AGENT_NAMES[c] for c in cls if c in AGENT_NAMES), None)
+    if agent:                         # Waybar draws the logo; here, the name
+        text = f"󰚩 {agent} {text}"
+    colour = "warn" if "high" in cls else ("muted" if "idle" in cls else "accent2")
+    return text, colour, plain_text(d.get("tooltip", "")), "veloguard-quickpanel --usage"
+
+
+def m_bluetooth():
+    if not shutil.which("bluetoothctl"):
+        return "", None, "", ""
+    show = run("bluetoothctl", "show")
+    if "Controller" not in show:
+        return "", None, "", ""                          # no adapter: no button
+    if "Powered: yes" not in show:
+        return "󰂲", "muted", "Bluetooth off — click to turn it on", "veloguard-bt-menu"
+    conn = [l.split(" ", 2)[2] for l in run("bluetoothctl", "devices", "Connected").splitlines()
+            if l.startswith("Device ") and len(l.split(" ", 2)) == 3]
+    if conn:
+        return f"󰂱 {len(conn)}", "accent2", "Connected: " + ", ".join(conn), "veloguard-bt-menu"
+    return "󰂯", None, "Bluetooth on — click for your devices", "veloguard-bt-menu"
+
+
+def m_network():
+    rows = run("nmcli", "-t", "-f", "TYPE,STATE,CONNECTION", "device").splitlines()
+    wired = any(r.startswith("ethernet:connected") for r in rows)
+    wifi = next((r for r in rows if r.startswith("wifi:connected")), None)
+    if wifi:
+        sig = 0
+        for line in run("nmcli", "-t", "-f", "IN-USE,SIGNAL,SSID", "device", "wifi").splitlines():
+            if line.startswith("*:"):
+                try:
+                    sig = int(line.split(":")[1])
+                except ValueError:
+                    pass
+                break
+        icon = "󰤨" if sig > 75 else "󰤥" if sig > 50 else "󰤢" if sig > 25 else "󰤟"
+        name = wifi.split(":", 2)[2] if wifi.count(":") >= 2 else "Wi-Fi"
+        return icon, None, f"{name} · {sig}%\nClick: Wi-Fi networks", "veloguard-wifi-menu"
+    if wired:
+        return "󰀂", None, "Wired\nClick: Wi-Fi networks", "veloguard-wifi-menu"
+    return "󰤮", "muted", "Disconnected — click for Wi-Fi networks", "veloguard-wifi-menu"
+
+
+PROFILE_ICONS = {"performance": ("󰓅", "warn"), "balanced": ("󰾅", None), "power-saver": ("󰾆", "ok")}
+
+
+def m_power_profile():
+    if not shutil.which("powerprofilesctl"):
+        return "", None, "", ""
+    p = run("powerprofilesctl", "get").strip()
+    if not p:
+        return "", None, "", ""
+    icon, colour = PROFILE_ICONS.get(p, ("󰾅", None))
+    return icon, colour, f"Power profile: {p} — click for the next", "veloguard-bar --next-profile"
+
+
+def m_backlight():
+    if not shutil.which("brightnessctl"):
+        return "", None, "", ""
+    m = run("brightnessctl", "-m", "-c", "backlight").strip().split(",")
+    if len(m) < 4:
+        return "", None, "", ""                          # no backlight (desktop PC, VM)
+    pct = int(m[3].rstrip("%") or 0)
+    icon = "󰃞" if pct < 34 else "󰃟" if pct < 67 else "󰃠"
+    return f"{icon} {pct}%", None, f"Brightness {pct}% — scroll to change", ""
+
+
+def m_notifications():
+    if not shutil.which("dunstctl"):
+        return "", None, "", ""
+    paused = run("dunstctl", "is-paused").strip() == "true"
+    waiting = run("dunstctl", "count", "history").strip()
+    n = int(waiting) if waiting.isdigit() else 0
+    if paused:
+        return ("󰂛" if n else "󰪑"), "muted", "Do not disturb is on — right-click to turn it off", ""
+    return ("󰂚" if n else "󰂜"), None, f"{n} notification(s) — click for the list", ""
+
+
+STATIC = {
+    "veloguard": ("󰒃", "accent2", "VeloGuard — the guard menu", "veloguard-guard-menu"),
+    "quickpanel": ("󰒓", None, "Quick panel", "veloguard-quickpanel"),
+    "power": ("󰐥", None, "Power menu", "veloguard-powermenu"),
+}
+
+MODULES = {"guard": m_guard, "ai-usage": m_ai_usage, "bluetooth": m_bluetooth, "network": m_network,
+           "power-profile": m_power_profile, "backlight": m_backlight, "notifications": m_notifications}
+
+
+def panel_state() -> int:
+    """One JSON object for a quick panel that isn't VeloGuard's own (Clean
+    Config's island): VPN up?, this network trusted?, the guard's state, the
+    AI plan usage text."""
+    g = waybar_json("veloguard-waybar-guard")
+    vpn = subprocess.run(["veloguard-vpn", "active"], capture_output=True).returncode == 0 \
+        if shutil.which("veloguard-vpn") else False
+    key = label = ""
+    netid = "/opt/veloguard/bin/veloguard-netid"
+    if os.access(netid, os.X_OK):
+        f = run(netid).split("\t")
+        if len(f) >= 3 and f[0] in ("wifi", "wired"):
+            key, label = f[1], f[2]
+    trusted = False
+    if key:
+        try:
+            with open("/var/lib/veloguard/trusted-ssids", encoding="utf-8") as fh:
+                trusted = key in fh.read().split("\n")
+        except OSError:
+            pass
+    u = waybar_json("veloguard-ai-usage", "--waybar")
+    ucls = u.get("class", [])
+    ucls = ucls if isinstance(ucls, list) else [ucls]
+    utext = u.get("text", "")
+    agent = next((AGENT_NAMES[c] for c in ucls if c in AGENT_NAMES), None)
+    if agent:
+        utext = f"{agent} {utext}"
+    print(json.dumps({"vpn": vpn, "network": label, "onNetwork": bool(key), "trusted": trusted,
+                      "guardText": g.get("text", "🛡"), "guardClass": g.get("class", "ok"),
+                      "usage": utext.replace("󰚩", "").strip(), "usageHigh": "high" in ucls}))
+    return 0
+
+
+def next_profile() -> int:
+    order = ["power-saver", "balanced", "performance"]
+    avail = run("powerprofilesctl", "list")
+    order = [p for p in order if f"{p}:" in avail] or order
+    cur = run("powerprofilesctl", "get").strip()
+    nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else "balanced"
+    subprocess.run(["powerprofilesctl", "set", nxt], check=False)
+    return 0
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if args[:1] == ["--next-profile"]:
+        return next_profile()
+    if args[:1] == ["panel-state"]:
+        return panel_state()
+    if not args or args[0] not in {**MODULES, **STATIC}:
+        print(__doc__.split("\n\n")[1], file=sys.stderr)
+        return 2
+    name = args[0]
+    fmt = next((a for a in args[1:] if a in ("--polybar", "--genmon", "--plain")), "--plain")
+    text, colour, tip, click = STATIC[name] if name in STATIC else MODULES[name]()
+    c = colors()
+    if fmt == "--polybar":
+        # Only our own short texts reach polybar (no tooltips there): no
+        # outside text can smuggle a %{…} action tag in. Strip it anyway.
+        text = text.replace("%{", "")
+        print(f"%{{F{c[colour]}}}{text}%{{F-}}" if text and colour else text)
+    elif fmt == "--genmon":
+        t = html.escape(text)
+        if t and colour:
+            t = f"<span foreground='{c[colour]}'>{t}</span>"
+        out = f"<txt>{t or ' '}</txt>"
+        if tip:
+            out += f"<tool>{html.escape(tip)}</tool>"
+        if click:
+            out += f"<txtclick>{click}</txtclick>"
+        print(out)
+    else:
+        print(text)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

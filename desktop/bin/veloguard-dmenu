@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#
+# veloguard-dmenu — one menu for every desktop VeloGuardOS offers. Reads the
+# choices on stdin (one per line), prints the one picked; exit 1 if cancelled,
+# like dmenu. Every VeloGuard menu (guard, VPN, Wi-Fi, Bluetooth, power,
+# theme, agents) goes through here, so the same buttons work everywhere:
+#
+#   Hyprland, niri, COSMIC (Wayland + layer-shell) → wofi
+#   i3, Xfce (X11)                                   → rofi
+#   GNOME (Mutter has no layer-shell: wofi can't open) → zenity
+#
+#   veloguard-dmenu [-p PROMPT] [--password] [--width W] [--height H]
+#
+# VELOGUARD_DMENU=wofi|rofi|zenity forces a backend. A missing tool falls
+# back to the next one that exists.
+set -uo pipefail
+
+prompt="" password=0 width=380 height=320
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p|--prompt) prompt="${2:-}"; shift 2 ;;
+    --password)  password=1; shift ;;
+    --width)     width="${2:-380}"; shift 2 ;;
+    --height)    height="${2:-320}"; shift 2 ;;
+    -i|--insensitive) shift ;;                     # always case-insensitive
+    *) echo "veloguard-dmenu: unknown option $1" >&2; exit 2 ;;
+  esac
+done
+[[ $width =~ ^[0-9]+$ ]] || width=380
+[[ $height =~ ^[0-9]+$ ]] || height=320
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+pick_backend() {
+  local want="${VELOGUARD_DMENU:-}"
+  if [ -z "$want" ]; then
+    case "${XDG_CURRENT_DESKTOP:-}" in
+      *GNOME*|*gnome*) want=zenity ;;
+    esac
+  fi
+  if [ -z "$want" ]; then
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then want=wofi
+    elif [ -n "${DISPLAY:-}" ]; then want=rofi
+    else want=zenity
+    fi
+  fi
+  local b
+  for b in "$want" zenity wofi rofi; do
+    case "$b" in
+      wofi)   [ -n "${WAYLAND_DISPLAY:-}" ] && have wofi && { echo wofi; return; } ;;
+      rofi)   { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } && have rofi && { echo rofi; return; } ;;
+      zenity) have zenity && { echo zenity; return; } ;;
+    esac
+  done
+  echo none
+}
+
+backend="$(pick_backend)"
+
+# The password prompt has no list: stdin is ignored.
+if [ "$password" = 1 ]; then
+  case "$backend" in
+    wofi)   exec wofi --dmenu --password --width "$width" --height 80 -p "$prompt" </dev/null ;;
+    rofi)   exec rofi -dmenu -password -l 0 -p "$prompt" </dev/null ;;
+    zenity) exec zenity --password --title="${prompt:-VeloGuard}" 2>/dev/null ;;
+    *)      echo "veloguard-dmenu: no menu program (wofi, rofi or zenity)" >&2; exit 1 ;;
+  esac
+fi
+
+case "$backend" in
+  wofi)
+    exec wofi --dmenu --insensitive --width "$width" --height "$height" -p "$prompt" ;;
+  rofi)
+    # -i: case-insensitive; the theme comes from ~/.config/rofi/config.rasi
+    # (the active VeloGuard theme's colours, written by veloguard-theme).
+    exec rofi -dmenu -i -p "${prompt:-VeloGuard}" -theme-str "window { width: ${width}px; }" ;;
+  zenity)
+    # One column, no header: a plain list. zenity reads the rows from stdin.
+    exec zenity --list --title="${prompt:-VeloGuard}" --text="${prompt:-VeloGuard}" \
+      --column="$prompt" --hide-header --width "$width" --height "$((height + 80))" 2>/dev/null ;;
+  *)
+    echo "veloguard-dmenu: no menu program (wofi, rofi or zenity)" >&2; exit 1 ;;
+esac

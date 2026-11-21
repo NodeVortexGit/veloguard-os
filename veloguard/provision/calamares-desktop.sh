@@ -101,29 +101,36 @@ SSHD
 case "$DE" in
   hyprland|cleanconfig)
     PKGS=(); SESSION=/usr/share/wayland-sessions/hyprland.desktop ;;
+  # Every desktop gets VeloGuard's buttons (veloguard-desktop-setup below):
+  # the packages after the desktop's own are what its VeloGuard rice uses.
   gnome)
     PKGS=(gnome-shell gnome-session gnome-settings-daemon gnome-control-center gnome-keyring
           nautilus gnome-console gnome-text-editor gnome-system-monitor gnome-calculator
           gnome-disk-utility gnome-tweaks loupe papers gvfs xdg-desktop-portal-gnome
-          gnome-backgrounds)
+          gnome-backgrounds
+          gnome-shell-extension-appindicator)
     SESSION=/usr/share/wayland-sessions/gnome.desktop ;;
   xfce)
     PKGS=(xfce4 xfce4-whiskermenu-plugin xfce4-pulseaudio-plugin xfce4-screenshooter
           xfce4-notifyd xfce4-power-manager mousepad ristretto network-manager-applet
-          pavucontrol xorg-server)
+          pavucontrol xorg-server
+          xfce4-genmon-plugin xfce4-xkb-plugin xfce4-screensaver xfce4-clipman-plugin
+          rofi xdotool xorg-xset gammastep)
     SESSION=/usr/share/xsessions/xfce.desktop ;;
   niri)
-    PKGS=(niri xwayland-satellite fuzzel waybar mako swaybg swaylock swayidle alacritty
-          xdg-desktop-portal-gnome xdg-desktop-portal-gtk)
+    PKGS=(niri xwayland-satellite alacritty xdg-desktop-portal-gnome xdg-desktop-portal-gtk
+          wlsunset)
     SESSION=/usr/share/wayland-sessions/niri.desktop ;;
   i3)
-    PKGS=(i3-wm i3status i3lock dmenu rofi picom xss-lock dex feh alacritty
-          network-manager-applet xorg-server xorg-xinit)
+    PKGS=(i3-wm i3lock rofi picom xss-lock dex feh alacritty network-manager-applet
+          xorg-server xorg-xinit
+          polybar dunst maim xclip xdotool xorg-xset gammastep)
     SESSION=/usr/share/xsessions/i3.desktop ;;
   cosmic)
     PKGS=(cosmic-session cosmic-comp cosmic-panel cosmic-launcher cosmic-files
           cosmic-terminal cosmic-settings cosmic-store xdg-desktop-portal-cosmic
-          cosmic-wallpapers)
+          cosmic-wallpapers
+          wlsunset)
     SESSION=/usr/share/wayland-sessions/cosmic.desktop ;;
   headless)
     headless ;;
@@ -184,6 +191,26 @@ fi
 
 # Done only when the desktop can actually start.
 [ -f "$SESSION" ] && pacman -Q "$DM" >/dev/null 2>&1 || ok=0
+
+# VeloGuard's rice for it: the same buttons as VeloGuard Hyprland (the bar,
+# the guard, AI usage, the quick panel, notifications, the menus, the keys).
+if [ "$ok" = 1 ]; then
+  if [ "$DE" = gnome ]; then
+    # System-wide: VeloGuard's Shell extension (on the disc) + the tray
+    # extension, dark style, wallpaper and VeloGuard's keys as defaults.
+    install -d /etc/dconf/db/local.d /etc/dconf/profile
+    install -m644 /usr/share/veloguard/desktop/gnome/dconf/00-veloguard /etc/dconf/db/local.d/00-veloguard
+    if [ ! -e /etc/dconf/profile/user ]; then
+      printf 'user-db:user\nsystem-db:local\n' > /etc/dconf/profile/user
+    elif ! grep -qx 'system-db:local' /etc/dconf/profile/user; then
+      echo 'system-db:local' >> /etc/dconf/profile/user
+    fi
+    dconf update || echo "dconf update failed — GNOME starts with its own defaults"
+  fi
+  if [ -n "$U" ]; then
+    /usr/local/bin/veloguard-desktop-setup "$DE" "$U" || echo "VeloGuard's $DE settings: see above"
+  fi
+fi
 
 if [ "$ok" = 1 ]; then
   rm -f "$PENDING"

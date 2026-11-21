@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#
+# veloguard-desktop-autostart <desktop> — start the VeloGuard session on a
+# desktop other than VeloGuard Hyprland (which starts its own, autostart.lua):
+# the same bar, quick panel, notifications, launcher, lock, wallpaper and
+# guard helpers, in the form each desktop takes them.
+#
+#   niri   — Waybar (niri layout), swaync, the quick panel, swayosd, Albert,
+#            hypridle/hyprlock, swaybg, clipboard history, polkit, VPN auto-protect
+#   cosmic — Waybar (COSMIC layout; COSMIC's own top panel steps aside), the
+#            quick panel, Albert, clipboard history
+#   i3     — polybar, dunst, the quick panel, Albert, picom, xss-lock + i3lock,
+#            feh, polkit, XDG autostart (dex)
+#   xfce   — the quick panel, Albert (the panel, notifications, lock, polkit
+#            and autostart are Xfce's own)
+#   gnome  — Albert (the rest is GNOME's own plus VeloGuard's Shell extension)
+#
+# Called by niri's spawn-at-startup / i3's exec, and through
+# /etc/xdg/autostart/veloguard-desktop.desktop on COSMIC, Xfce and GNOME.
+# Every component goes through veloguard-session-start (journal + retries).
+set -u
+DE="${1:-$(veloguard-session de 2>/dev/null)}"
+start() { setsid -f veloguard-session-start "$@" >/dev/null 2>&1 < /dev/null; }
+have() { command -v "$1" >/dev/null 2>&1; }
+running() { pgrep -u "$(id -u)" -x "$1" >/dev/null 2>&1; }
+POLKIT=/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1
+
+# The theme (and its colour files for rofi/polybar/dunst/i3/niri) first:
+# everything below reads them.
+veloguard-theme ensure >/dev/null 2>&1 || true
+
+# Once per account and desktop: the settings that make it look like VeloGuard.
+veloguard-desktop-setup --session "$DE" >/dev/null 2>&1 || true
+
+# The session's environment to systemd / D-Bus (portals, app launches).
+systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE \
+  NIRI_SOCKET I3SOCK >/dev/null 2>&1 || true
+dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP \
+  XDG_SESSION_TYPE >/dev/null 2>&1 || true
+
+case "$DE" in
+  niri)
+    running waybar || start waybar -c /usr/share/veloguard/desktop/waybar/niri.jsonc
+    running swaync || start swaync
+    running swayosd-server || start swayosd-server
+    running hypridle || start hypridle
+    veloguard-session wallpaper
+    start wl-paste --type text --watch cliphist store
+    start wl-paste --type image --watch cliphist store
+    [ -x "$POLKIT" ] && ! running polkit-gnome-au && start "$POLKIT"
+    have fcitx5 && ! running fcitx5 && start fcitx5 -d --replace
+    setsid -f veloguard-vpn-autoprotect >/dev/null 2>&1 < /dev/null
+    ;;
+  cosmic)
+    running waybar || start waybar -c /usr/share/veloguard/desktop/waybar/cosmic.jsonc
+    start wl-paste --type text --watch cliphist store
+    start wl-paste --type image --watch cliphist store
+    ;;
+  i3)
+    veloguard-polybar
+    running dunst || start dunst
+    running picom || start picom --config /usr/share/veloguard/desktop/picom/picom.conf
+    running xss-lock || start xss-lock --transfer-sleep-lock -- i3lock --nofork --color=0a0a12
+    veloguard-session wallpaper
+    [ -x "$POLKIT" ] && ! running polkit-gnome-au && start "$POLKIT"
+    # XDG autostart: VPN auto-protect, the input method, …
+    have dex && dex --autostart --environment i3 >/dev/null 2>&1
+    ;;
+  xfce|gnome) ;;
+esac
+
+# The quick panel (not on GNOME: its own quick settings carry the same
+# toggles) and the search bar, everywhere.
+if [ "$DE" != gnome ] && have qs && ! qs -c veloguard ipc call panel close >/dev/null 2>&1; then
+  start qs -c veloguard -n
+fi
+have albert && ! running albert && start albert
+
+# First boot: the guard's AI-plane setup wizard (once).
+setsid -f veloguard-firstboot-desktop >/dev/null 2>&1 < /dev/null
+exit 0

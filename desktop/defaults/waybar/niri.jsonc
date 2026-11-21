@@ -1,0 +1,24 @@
+// VeloGuardOS Waybar on niri — the same bar as on VeloGuard Hyprland. Every
+// module's settings come from your ~/.config/waybar/config.jsonc (edit them
+// there; both desktops follow); only the module lists differ: niri's
+// workspaces, window title and keyboard layout. (Waybar: the including file's
+// keys win over the included one's.)
+{
+  "include": ["~/.config/waybar/config.jsonc"],
+  "modules-left": ["custom/veloguard", "niri/workspaces", "niri/window"],
+  "modules-center": ["clock"],
+  "modules-right": [
+    "custom/ai-usage",
+    "custom/guard",
+    "niri/language",
+    "network",
+    "bluetooth",
+    "pulseaudio",
+    "backlight",
+    "power-profiles-daemon",
+    "battery",
+    "group/tray-expander",
+    "custom/notifications",
+    "custom/quickpanel"
+  ]
+}

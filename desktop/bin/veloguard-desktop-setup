@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+#
+# veloguard-desktop-setup — put VeloGuard's rice for a desktop into an
+# account: the configs that give niri, i3, Xfce and COSMIC the same buttons
+# as VeloGuard Hyprland (GNOME's come system-wide: the VeloGuard Shell
+# extension + /etc/dconf/db/local.d/00-veloguard). Files the account already
+# has are never replaced — remove one to get VeloGuard's back.
+#
+#   veloguard-desktop-setup DESKTOP              # into your own account
+#   sudo veloguard-desktop-setup DESKTOP USER    # into USER's (and /etc/skel)
+#   veloguard-desktop-setup --session DESKTOP    # at login (autostart): what
+#                                                # needs the running session, once
+#
+# DESKTOP: niri | i3 | xfce | cosmic | gnome | hyprland | cleanconfig
+set -uo pipefail
+SHARE=/usr/share/veloguard/desktop
+say() { printf '[veloguard-desktop] %s\n' "$*"; }
+
+# copy_new SRC DEST — a file, or a directory's files, only where DEST has none
+copy_new() {
+  local src="$1" dest="$2" f rel
+  if [ -d "$src" ]; then
+    while IFS= read -r -d '' f; do
+      rel="${f#"$src"/}"
+      case "$rel" in README.md) continue ;; esac
+      copy_new "$f" "$dest/$rel"
+    done < <(find "$src" -type f -print0)
+    return 0
+  fi
+  [ -r "$src" ] || return 0
+  [ -e "$dest" ] && return 0
+  mkdir -p "$(dirname "$dest")" && cp "$src" "$dest"
+}
+
+# hide_autostart NAME.desktop — the bar has its own button for it
+hide_autostart() {
+  local f="$1/$2"
+  [ -e "$f" ] && return 0
+  mkdir -p "$1"
+  printf '[Desktop Entry]\nType=Application\nName=%s\nHidden=true\n' "${2%.desktop}" > "$f"
+}
+
+# files ROOT DESKTOP — the per-account files of a desktop under ROOT (a home
+# directory, or /etc/skel)
+files() {
+  local de="$2" c="$1/.config"
+  case "$de" in
+    niri)
+      copy_new "$SHARE/niri/config.kdl" "$c/niri/config.kdl" ;;
+    i3)
+      copy_new "$SHARE/i3/config" "$c/i3/config"
+      copy_new "$SHARE/polybar/config.ini" "$c/polybar/config.ini"
+      copy_new "$SHARE/rofi/config.rasi" "$c/rofi/config.rasi"
+      copy_new "$SHARE/dunst/dunstrc" "$c/dunst/dunstrc"
+      mkdir -p "$c/dunst/dunstrc.d"
+      [ -e "$c/dunst/dunstrc.d/50-veloguard-theme.conf" ] || [ -L "$c/dunst/dunstrc.d/50-veloguard-theme.conf" ] \
+        || ln -s ../../veloguard/generated/dunst.conf "$c/dunst/dunstrc.d/50-veloguard-theme.conf"
+      # Wi-Fi and Bluetooth have their own buttons on the bar
+      hide_autostart "$c/autostart" nm-applet.desktop
+      hide_autostart "$c/autostart" blueman.desktop ;;
+    xfce)
+      copy_new "$SHARE/xfce/xfce4-panel.xml" "$c/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
+      copy_new "$SHARE/xfce/xsettings.xml" "$c/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml"
+      copy_new "$SHARE/rofi/config.rasi" "$c/rofi/config.rasi"
+      hide_autostart "$c/autostart" nm-applet.desktop
+      hide_autostart "$c/autostart" blueman.desktop ;;
+    cosmic)
+      copy_new "$SHARE/cosmic" "$c/cosmic" ;;
+    gnome|hyprland|cleanconfig|headless) ;;
+    *) say "unknown desktop '$de'"; return 2 ;;
+  esac
+}
+
+# Once per account and desktop, inside the running session.
+session_setup() {
+  local de="$1" mark="$HOME/.config/veloguard/desktop-$1.done"
+  [ -e "$mark" ] && return 0
+  mkdir -p "$(dirname "$mark")"
+  files "$HOME" "$de"
+  case "$de" in
+    niri|i3|cosmic|xfce)
+      # GTK 4 / libadwaita apps follow this; GTK 3 apps the settings.ini
+      gsettings set org.gnome.desktop.interface color-scheme prefer-dark 2>/dev/null
+      if [ ! -e "$HOME/.config/gtk-3.0/settings.ini" ]; then
+        mkdir -p "$HOME/.config/gtk-3.0"
+        printf '[Settings]\ngtk-application-prefer-dark-theme=1\n' > "$HOME/.config/gtk-3.0/settings.ini"
+      fi ;;
+  esac
+  case "$de" in
+    xfce)
+      # VeloGuard's keys, added to Xfce's own
+      local k
+      while IFS='|' read -r k cmd; do
+        [ -n "$k" ] || continue
+        xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$k" >/dev/null 2>&1 && continue
+        xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$k" -n -t string -s "$cmd"
+      done <<'KEYS'
+<Shift><Super>g|veloguard-guard-menu
+<Shift><Super>v|veloguard-guard-menu vpn
+<Shift><Super>a|veloguard-agent
+<Shift><Super>e|veloguard-agent ask
+<Super>u|veloguard-quickpanel
+<Super>x|veloguard-powermenu
+<Shift><Super>t|veloguard-theme menu
+<Super>l|veloguard-session lock
+<Primary><Super>v|veloguard-session clipboard
+KEYS
+      veloguard-session wallpaper ;;
+  esac
+  touch "$mark"
+}
+
+case "${1:-}" in
+  --session)
+    session_setup "${2:-$(veloguard-session de)}" ;;
+  ""|-h|--help)
+    sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *)
+    de="$1"; u="${2:-}"
+    if [ -n "$u" ]; then
+      [ "$(id -u)" -eq 0 ] || { say "run as root to set up another account"; exit 1; }
+      home="$(getent passwd "$u" | cut -d: -f6)"
+      [ -n "$home" ] && [ -d "$home" ] || { say "no home for $u"; exit 1; }
+      files /etc/skel "$de"
+      runuser -u "$u" -- "$0" "$de" || exit 1
+      say "$de: VeloGuard's buttons and look set up for $u"
+    else
+      files "$HOME" "$de"
+      # the theme's colour files (rofi, polybar, dunst, i3, niri) right away,
+      # so the very first login already has them
+      veloguard-theme ensure >/dev/null 2>&1 || true
+    fi ;;
+esac
+exit 0

@@ -40,6 +40,9 @@
     "persistent-workspaces": { "1": [], "2": [], "3": [], "4": [], "5": [] }
   },
   "niri/workspaces": { "format": "{icon}", "format-icons": { "default": "", "active": "󱓻" } },
+  "niri/window": { "format": "{title}", "max-length": 48, "separate-outputs": true },
+  // COSMIC (ext-workspace)
+  "ext/workspaces": { "format": "{icon}", "format-icons": { "default": "", "active": "󱓻" }, "on-click": "activate" },
   "hyprland/window": { "format": "{title}", "max-length": 48, "separate-outputs": true, "empty-format": "" },
 
   "clock": {
@@ -80,6 +83,17 @@
     "format": "{short}",
     "on-click": "veloguard-switch-layout",
     "tooltip": false
+  },
+  "niri/language": {
+    "format": "{short}",
+    "on-click": "veloguard-switch-layout",
+    "tooltip": false
+  },
+  // COSMIC: no way to read its input source from here — a button that switches it
+  "custom/layout": {
+    "format": "󰌌",
+    "tooltip-format": "Keyboard layout — click for the next (Super+Space)",
+    "on-click": "veloguard-switch-layout"
   },
   "network": {
     "format-icons": ["󰤯", "󰤟", "󰤢", "󰤥", "󰤨"],

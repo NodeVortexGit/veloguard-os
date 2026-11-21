@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 #
-# veloguard-guard-menu — the Hyprland/wofi front-end to the guard. Ports the old
-# GNOME Shell quick toggles (VPN provider menu, Wi-Fi trust, Bulgarian Mode) to
-# a wofi menu. Every privileged action goes through the SAME helpers the GNOME
+# veloguard-guard-menu — the guard's menu (the bar's 󰒃 button, Super+Shift+G) on
+# every desktop: wofi on Hyprland/niri/COSMIC, rofi on i3/Xfce, zenity on GNOME
+# (veloguard-dmenu picks). Ports the old GNOME Shell quick toggles (VPN
+# provider menu, Wi-Fi trust, Bulgarian Mode). Every privileged action goes through the SAME helpers the GNOME
 # extension used (veloguard-vpn, veloguard-wifi-trust, veloguard-bulgarian-mode),
 # which keep their polkit rules — no new privilege path is introduced here.
 #
 #   veloguard-guard-menu           # top-level menu
 #   veloguard-guard-menu vpn       # jump straight to the VPN submenu
+#   veloguard-guard-menu do ACTION # one action, no menu (vpn-connect proton|surfshark|nord,
+#                                  # vpn-off, vpn-import, tor, trust-toggle, bgmode, status)
 set -euo pipefail
 
 VPN="${VELOGUARD_VPN:-veloguard-vpn}"
@@ -16,7 +19,7 @@ WIFI_TRUST="${VELOGUARD_WIFI_TRUST:-veloguard-wifi-trust}"
 BGMODE="${VELOGUARD_BGMODE:-veloguard-bulgarian-mode}"
 TRUSTED_LIST="${VELOGUARD_TRUSTED_LIST:-/var/lib/veloguard/trusted-ssids}"
 
-menu() { wofi --dmenu --width 380 --height 320 -p "$1"; }
+menu() { veloguard-dmenu -p "$1" --width 380 --height 320; }
 note() { notify-send "VeloGuard" "$1"; }
 # A failure: the notification offers to hand it to an AI agent.
 note_err() { veloguard-notify --error "VeloGuard" "$1" 2>/dev/null || notify-send "VeloGuard" "$1"; }
@@ -187,7 +190,29 @@ top_menu() {
   esac
 }
 
+# The menu's actions on their own, for front-ends that draw their own menu
+# (VeloGuard's GNOME Shell extension): the same code paths as the menu.
+do_action() {
+  case "${1:-}" in
+    vpn-connect)
+      case "${2:-}" in
+        proton)    vpn_connect proton "Proton VPN" ;;
+        surfshark) vpn_connect surfshark "Surfshark" ;;
+        nord)      vpn_connect nord "NordVPN" ;;
+        *)         echo "usage: veloguard-guard-menu do vpn-connect proton|surfshark|nord" >&2; return 2 ;;
+      esac ;;
+    vpn-off)      vpn_off ;;
+    vpn-import)   "$VPN_UI" import ;;
+    tor)          if pkexec "$VPN" tor; then note "Tor fallback enabled"; else note_err "Tor setup failed"; fi ;;
+    trust-toggle) trust_toggle ;;
+    bgmode)       "$BGMODE" toggle || note_err "Bulgarian Mode failed — run: veloguard-bulgarian-mode selftest" ;;
+    status)       note "$(veloguard status 2>/dev/null | head -n 20 || echo 'guard status unavailable')" ;;
+    *) echo "usage: veloguard-guard-menu do vpn-connect <provider>|vpn-off|vpn-import|tor|trust-toggle|bgmode|status" >&2; return 2 ;;
+  esac
+}
+
 case "${1:-}" in
   vpn) vpn_menu ;;
+  do)  shift; do_action "$@" ;;
   *)   top_menu ;;
 esac

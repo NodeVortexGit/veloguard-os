@@ -87,14 +87,50 @@ VeloGuard keybindings (added on top of the Hyprland defaults): `Super+Shift+G`
 guard menu · `Super+Shift+V` VPN · `Super+Shift+A` agent · `Super+Escape` power
 menu · `Super+Shift+T` theme. Full set in `defaults/hypr/bindings/`.
 
+## Every desktop gets the same buttons
+
+The installer's Desktop page offers more than VeloGuard Hyprland. Whichever is
+picked, it gets VeloGuard's buttons — the same set as the Hyprland bar: the
+guard menu (󰒃), AI plan usage, the guard's state (VPN / network trust /
+staged update / root grant), keyboard layout, Wi-Fi, Bluetooth, volume,
+brightness, power profile, battery + power menu, tray, notifications, and the
+quick panel (󰒓) — plus VeloGuard's keys and the active theme's colours.
+
+| Desktop | Bar | Quick panel | Menus | Notifications | Config (per account) |
+|---|---|---|---|---|---|
+| VeloGuard Hyprland | Waybar | Quickshell | wofi | swaync | `~/.config/hypr`, `~/.config/waybar` |
+| niri | Waybar (`defaults/waybar/niri.jsonc`) | Quickshell | wofi | swaync | `~/.config/niri/config.kdl` |
+| COSMIC | Waybar (`defaults/waybar/cosmic.jsonc`) in place of COSMIC's top panel; the dock stays | Quickshell | wofi | COSMIC's (bell on the dock) | `~/.config/cosmic/…` |
+| i3 | polybar (`defaults/polybar`) | Quickshell (X11) | rofi | dunst | `~/.config/i3/config`, `~/.config/polybar` |
+| Xfce | the Xfce panel, VeloGuard buttons as Generic Monitor plugins | Quickshell (X11) | rofi | xfce4-notifyd | xfconf (`defaults/xfce`) |
+| GNOME | GNOME's top bar + the VeloGuard Shell extension | GNOME's quick settings (+ VPN, Trusted, Bulgarian Mode) | zenity / the extension's menus | GNOME's | system dconf (`defaults/gnome`) |
+| Clean Config | kept exactly as published | its own island panel, with VeloGuard's buttons fitted in (VPN, Trusted, Guard, AI agent, AI usage — `veloguard-clean-config-buttons`) | wofi | its own | the Clean Config repo |
+
+What makes that possible:
+
+| Helper | Role |
+|---|---|
+| `veloguard-dmenu` | One menu for every desktop: wofi (Wayland), rofi (X11), zenity (GNOME). Every VeloGuard menu goes through it. |
+| `veloguard-session` | The session actions each desktop does its own way: log out, lock, screens off, next keyboard layout, screenshot, night light, do not disturb, notifications, clipboard history, show/hide the bar, wallpaper. |
+| `veloguard-bar` | The bar's status buttons for polybar and Xfce's Generic Monitor (and Clean Config's panel): the guard, AI usage, Bluetooth, network, power profile, brightness, the bell. Escapes what it shows (the guard's tooltip carries the Wi-Fi's name). |
+| `veloguard-desktop-autostart` | Starts the VeloGuard session on niri, COSMIC, i3, Xfce and GNOME. |
+| `veloguard-desktop-setup` | Puts a desktop's VeloGuard configs into an account (the installer runs it; files already there are kept). |
+| `veloguard-polybar` | polybar on i3, with this machine's battery / Wi-Fi filled in. |
+
+Changing your mind later: `sudo calamares-desktop.sh <desktop> <you>` installs
+another desktop with its VeloGuard rice; pick it at the login screen.
+
 ## Theming
 
 A theme is a directory of color files under `/usr/share/veloguard/themes/`. The
 active theme is the symlink `~/.config/veloguard/current`; every desktop config
-sources its colors *through* that symlink, so switching is a relink + reload:
+sources its colors *through* that symlink, so switching is a relink + reload.
+Configs that can't read Waybar's CSS (rofi, polybar, dunst, i3, niri) include
+colour files that `veloguard-theme` writes into `~/.config/veloguard/generated`
+from the theme's `waybar.css` palette:
 
 ```bash
-veloguard-theme list          # veloguard, tokyo-night, catppuccin
+veloguard-theme list          # frost, veloguard, tokyo-night, catppuccin
 veloguard-theme set tokyo-night
 veloguard-theme menu          # pick with wofi (Super+Shift+Ctrl+Space)
 ```

@@ -5,6 +5,12 @@
 // screenshot / lock / agent / power. Frosted glass (Hyprland layer rule
 // "veloguard-quickpanel"), Frost colours.
 //
+// The same panel on every desktop that can host it: a layer over the screen
+// on Hyprland, niri and COSMIC, an X11 panel window on i3 and Xfce (GNOME
+// puts the same toggles in its own quick settings — the VeloGuard GNOME Shell
+// extension). What differs per desktop (night light, do not disturb,
+// screenshots, lock) goes through veloguard-session.
+//
 //   qs -c veloguard ipc call panel toggle     # Super alone, Super+U, the bar's 󰒓
 //   qs -c veloguard ipc call panel usage      # the bar's AI-usage button
 import QtQuick
@@ -20,6 +26,11 @@ ShellRoot {
     id: root
     property bool open: false
     property bool usageOnly: false
+    // Hyprland closes the panel on a click elsewhere (focus grab); elsewhere
+    // it closes when it loses the keyboard after having had it.
+    readonly property bool hypr: !!Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE")
+    property bool hadFocus: false
+    onOpenChanged: hadFocus = false
 
     // Frost palette
     readonly property color glass: Qt.rgba(10 / 255, 10 / 255, 18 / 255, 0.64)
@@ -62,8 +73,8 @@ ShellRoot {
             "bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo bt=1 || echo bt=0;" +
             "veloguard-vpn active >/dev/null 2>&1 && echo vpn=1 || echo vpn=0;" +
             "rfkill list 2>/dev/null | grep -q 'Soft blocked: no' && echo air=0 || echo air=1;" +
-            "pgrep -x hyprsunset >/dev/null && echo night=1 || echo night=0;" +
-            "echo dnd=$(swaync-client -D 2>/dev/null);" +
+            "[ \"$(veloguard-session nightlight status)\" = true ] && echo night=1 || echo night=0;" +
+            "echo dnd=$(veloguard-session dnd status);" +
             "echo vol=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null);" +
             "echo bri=$(brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%')"]
         stdout: StdioCollector {
@@ -105,10 +116,11 @@ ShellRoot {
         WlrLayershell.namespace: "veloguard-quickpanel"
         WlrLayershell.layer: WlrLayer.Overlay
         WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+        focusable: true
 
         HyprlandFocusGrab {
             windows: [win]
-            active: root.open
+            active: root.open && root.hypr
             onCleared: root.open = false
         }
 
@@ -119,6 +131,10 @@ ShellRoot {
             border.width: 1
             focus: true
             Keys.onEscapePressed: root.open = false
+            onActiveFocusChanged: {
+                if (activeFocus) root.hadFocus = true
+                else if (root.open && root.hadFocus && !root.hypr) root.open = false
+            }
 
             ColumnLayout {
                 id: body
@@ -156,9 +172,9 @@ ShellRoot {
                     Toggle { icon: "󰀝"; label: "Airplane"; on: root.airplane
                              onClicked: root.sh(root.airplane ? "rfkill unblock all" : "rfkill block all") }
                     Toggle { icon: "󰖔"; label: "Night light"; on: root.night
-                             onClicked: root.sh(root.night ? "pkill hyprsunset" : "setsid -f hyprsunset -t 4000 >/dev/null 2>&1") }
+                             onClicked: root.sh("veloguard-session nightlight toggle") }
                     Toggle { icon: "󰂛"; label: "Do not disturb"; on: root.dnd
-                             onClicked: root.sh("swaync-client -d") }
+                             onClicked: root.sh("veloguard-session dnd toggle") }
                 }
 
                 // ── sliders ─────────────────────────────────────────────
@@ -255,8 +271,8 @@ ShellRoot {
                 RowLayout {
                     visible: !root.usageOnly
                     Layout.fillWidth: true; spacing: 6
-                    Action { icon: "󰄀"; label: "Screenshot"; onClicked: { root.open = false; root.sh("sleep 0.3; grim -g \"$(slurp)\" - | wl-copy && notify-send -u low 'Screenshot copied'") } }
-                    Action { icon: "󰌾"; label: "Lock"; onClicked: { root.open = false; root.sh("loginctl lock-session") } }
+                    Action { icon: "󰄀"; label: "Screenshot"; onClicked: { root.open = false; root.sh("sleep 0.3; veloguard-session screenshot area") } }
+                    Action { icon: "󰌾"; label: "Lock"; onClicked: { root.open = false; root.sh("veloguard-session lock") } }
                     Action { icon: "󰚩"; label: "Agent"; onClicked: { root.open = false; root.sh("veloguard-agent") } }
                     Action { icon: "󰐥"; label: "Power"; onClicked: { root.open = false; root.sh("veloguard-powermenu") } }
                 }

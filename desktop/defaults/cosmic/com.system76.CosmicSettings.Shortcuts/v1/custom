@@ -1,0 +1,12 @@
+{
+    (modifiers: [Super, Shift], key: "g"): Spawn("veloguard-guard-menu"),
+    (modifiers: [Super, Shift], key: "v"): Spawn("veloguard-guard-menu vpn"),
+    (modifiers: [Super, Shift], key: "a"): Spawn("veloguard-agent"),
+    (modifiers: [Super, Shift], key: "e"): Spawn("veloguard-agent ask"),
+    (modifiers: [Super, Shift], key: "s"): Spawn("veloguard-quickpanel"),
+    (modifiers: [Super, Shift], key: "x"): Spawn("veloguard-powermenu"),
+    (modifiers: [Super, Shift], key: "t"): Spawn("veloguard-theme menu"),
+    (modifiers: [Super, Ctrl], key: "v"): Spawn("veloguard-session clipboard"),
+    (modifiers: [Super, Shift], key: "space"): Spawn("veloguard-session bar"),
+    (modifiers: [Alt], key: "space"): Spawn("albert toggle"),
+}

@@ -1,0 +1,297 @@
+// VeloGuardOS — niri, riced like the default VeloGuard Hyprland desktop:
+// the same top bar (Waybar: guard, AI usage, Wi-Fi, Bluetooth, volume,
+// brightness, power, tray, notifications, quick panel), the same quick
+// panel, notifications, launcher, lock screen and volume pop-up, Frost
+// colours under frosted glass. niri's own keys are kept; VeloGuard's are
+// added (see "VeloGuard" in binds below — Mod+Shift+/ lists every key).
+//
+// This file is yours: edit freely. Colours come from the active VeloGuard
+// theme (`veloguard-theme set …` rewrites the included file); niri reloads
+// either file live. Full reference: https://niri-wm.github.io/niri/
+// (Based on niri's default config, GPL-3.0-or-later.)
+
+input {
+    keyboard {
+        xkb {
+            // Empty: the system layout (the installer's Keyboard page, or
+            // `sudo localectl set-x11-keymap us,bg`). Mod+Space switches.
+        }
+        numlock
+    }
+    touchpad {
+        tap
+        natural-scroll
+    }
+    mouse {
+    }
+    trackpoint {
+    }
+}
+
+layout {
+    // Frost: no gaps, a thin dark-blue edge, every window translucent over
+    // blur (the colours are in the theme file included at the end).
+    gaps 0
+    center-focused-column "never"
+    preset-column-widths {
+        proportion 0.33333
+        proportion 0.5
+        proportion 0.66667
+    }
+    default-column-width { proportion 0.5; }
+    focus-ring {
+        off
+    }
+    border {
+        width 1
+        active-color "#3b5bd9"
+        inactive-color "#12121a"
+        urgent-color "#f26d7d"
+    }
+    shadow {
+        off
+    }
+    struts {
+    }
+}
+
+blur {
+    passes 3
+    offset 3.0
+    noise 0.012
+    saturation 1.3
+}
+
+// The VeloGuard session: bar, notifications, quick panel, volume pop-up,
+// launcher, idle/lock, wallpaper, clipboard history, polkit, VPN
+// auto-protect — the same set the Hyprland desktop starts.
+spawn-at-startup "veloguard-desktop-autostart" "niri"
+
+hotkey-overlay {
+    skip-at-startup
+}
+
+prefer-no-csd
+
+screenshot-path "~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
+
+animations {
+}
+
+// Frost: translucent windows, frosted (the wallpaper blurred behind them).
+window-rule {
+    opacity 0.88
+    background-effect {
+        blur true
+    }
+}
+window-rule {
+    match is-focused=false
+    opacity 0.80
+}
+window-rule {
+    match is-floating=true
+    opacity 0.92
+}
+// Video and games stay solid
+window-rule {
+    match app-id=r#"^(mpv|vlc|org\.videolan\.VLC|steam_app_.*)$"#
+    opacity 1.0
+}
+window-rule {
+    match app-id=r#"firefox$"# title="^Picture-in-Picture$"
+    open-floating true
+}
+// Albert (search), pavucontrol, Bluetooth and the VPN import dialogs float
+window-rule {
+    match app-id=r#"^albert$"#
+    match app-id=r#"^(org\.pulseaudio\.pavucontrol|pavucontrol)$"#
+    match app-id=r#"^\.?blueman-manager(-wrapped)?$"#
+    match app-id=r#"^zenity$"#
+    match app-id=r#"^polkit-gnome-authentication-agent-1$"#
+    open-floating true
+}
+
+// The bar, the quick panel, notifications, menus and the lock screen's
+// neighbours get the same frosted glass.
+layer-rule {
+    match namespace="^waybar$"
+    match namespace="^veloguard-quickpanel$"
+    match namespace="^swaync-control-center$"
+    match namespace="^swaync-notification-window$"
+    match namespace="^wofi$"
+    match namespace="^swayosd$"
+    background-effect {
+        blur true
+    }
+}
+
+binds {
+    Mod+Shift+Slash { show-hotkey-overlay; }
+
+    // ── VeloGuard ───────────────────────────────────────────────────────
+    Mod+Shift+G hotkey-overlay-title="VeloGuard: guard menu" { spawn "veloguard-guard-menu"; }
+    Mod+Shift+V hotkey-overlay-title="VeloGuard: VPN" { spawn "veloguard-guard-menu" "vpn"; }
+    Mod+A hotkey-overlay-title="VeloGuard: AI agent" { spawn "veloguard-agent"; }
+    Mod+Shift+A hotkey-overlay-title=null { spawn "veloguard-agent"; }
+    Mod+Shift+E hotkey-overlay-title="VeloGuard: ask an AI agent about an error" { spawn "veloguard-agent" "ask"; }
+    Mod+Shift+S hotkey-overlay-title="VeloGuard: quick panel" { spawn "veloguard-quickpanel"; }
+    Mod+N hotkey-overlay-title="Notifications" { spawn "swaync-client" "-t" "-sw"; }
+    Mod+Shift+N hotkey-overlay-title="Clear notifications" { spawn "swaync-client" "-C" "-sw"; }
+    Mod+X hotkey-overlay-title="Power menu" { spawn "veloguard-powermenu"; }
+    XF86PowerOff allow-when-locked=true { spawn "veloguard-powermenu"; }
+    Mod+Shift+T hotkey-overlay-title="Theme" { spawn "veloguard-theme" "menu"; }
+    Mod+Space hotkey-overlay-title="Keyboard layout" { spawn "veloguard-session" "layout"; }
+    Mod+Ctrl+V hotkey-overlay-title="Clipboard history" { spawn "veloguard-session" "clipboard"; }
+    Mod+Shift+Space hotkey-overlay-title="Show / hide the top bar" { spawn "veloguard-session" "bar"; }
+    Mod+D hotkey-overlay-title="Search (Albert)" { spawn "albert" "toggle"; }
+    Alt+Space hotkey-overlay-title=null { spawn "albert" "toggle"; }
+    Mod+T hotkey-overlay-title="Terminal" { spawn "alacritty"; }
+    Mod+Return hotkey-overlay-title=null { spawn "alacritty"; }
+    Mod+E hotkey-overlay-title="Files" { spawn-sh "flatpak run org.kde.dolphin"; }
+    Super+Alt+L hotkey-overlay-title="Lock" { spawn "veloguard-session" "lock"; }
+    Super+Alt+S allow-when-locked=true hotkey-overlay-title=null { spawn-sh "pkill orca || exec orca"; }
+
+    // Volume, microphone and brightness with the frosted pop-up (swayosd)
+    XF86AudioRaiseVolume allow-when-locked=true { spawn "veloguard-osd" "volume" "up"; }
+    XF86AudioLowerVolume allow-when-locked=true { spawn "veloguard-osd" "volume" "down"; }
+    XF86AudioMute        allow-when-locked=true { spawn "veloguard-osd" "volume" "mute"; }
+    XF86AudioMicMute     allow-when-locked=true { spawn "veloguard-osd" "mic" "mute"; }
+    XF86MonBrightnessUp   allow-when-locked=true { spawn "veloguard-osd" "brightness" "up"; }
+    XF86MonBrightnessDown allow-when-locked=true { spawn "veloguard-osd" "brightness" "down"; }
+    XF86AudioPlay        allow-when-locked=true { spawn-sh "playerctl play-pause"; }
+    XF86AudioStop        allow-when-locked=true { spawn-sh "playerctl stop"; }
+    XF86AudioPrev        allow-when-locked=true { spawn-sh "playerctl previous"; }
+    XF86AudioNext        allow-when-locked=true { spawn-sh "playerctl next"; }
+
+    // ── niri's own (its defaults) ───────────────────────────────────────
+    Mod+O repeat=false { toggle-overview; }
+    Mod+Q repeat=false { close-window; }
+
+    Mod+Left  { focus-column-left; }
+    Mod+Down  { focus-window-down; }
+    Mod+Up    { focus-window-up; }
+    Mod+Right { focus-column-right; }
+    Mod+H     { focus-column-left; }
+    Mod+J     { focus-window-down; }
+    Mod+K     { focus-window-up; }
+    Mod+L     { focus-column-right; }
+
+    Mod+Ctrl+Left  { move-column-left; }
+    Mod+Ctrl+Down  { move-window-down; }
+    Mod+Ctrl+Up    { move-window-up; }
+    Mod+Ctrl+Right { move-column-right; }
+    Mod+Ctrl+H     { move-column-left; }
+    Mod+Ctrl+J     { move-window-down; }
+    Mod+Ctrl+K     { move-window-up; }
+    Mod+Ctrl+L     { move-column-right; }
+
+    Mod+Home { focus-column-first; }
+    Mod+End  { focus-column-last; }
+    Mod+Ctrl+Home { move-column-to-first; }
+    Mod+Ctrl+End  { move-column-to-last; }
+
+    Mod+Shift+Left  { focus-monitor-left; }
+    Mod+Shift+Down  { focus-monitor-down; }
+    Mod+Shift+Up    { focus-monitor-up; }
+    Mod+Shift+Right { focus-monitor-right; }
+    Mod+Shift+H     { focus-monitor-left; }
+    Mod+Shift+J     { focus-monitor-down; }
+    Mod+Shift+K     { focus-monitor-up; }
+    Mod+Shift+L     { focus-monitor-right; }
+
+    Mod+Shift+Ctrl+Left  { move-column-to-monitor-left; }
+    Mod+Shift+Ctrl+Down  { move-column-to-monitor-down; }
+    Mod+Shift+Ctrl+Up    { move-column-to-monitor-up; }
+    Mod+Shift+Ctrl+Right { move-column-to-monitor-right; }
+    Mod+Shift+Ctrl+H     { move-column-to-monitor-left; }
+    Mod+Shift+Ctrl+J     { move-column-to-monitor-down; }
+    Mod+Shift+Ctrl+K     { move-column-to-monitor-up; }
+    Mod+Shift+Ctrl+L     { move-column-to-monitor-right; }
+
+    Mod+Page_Down      { focus-workspace-down; }
+    Mod+Page_Up        { focus-workspace-up; }
+    Mod+U              { focus-workspace-down; }
+    Mod+I              { focus-workspace-up; }
+    Mod+Ctrl+Page_Down { move-column-to-workspace-down; }
+    Mod+Ctrl+Page_Up   { move-column-to-workspace-up; }
+    Mod+Ctrl+U         { move-column-to-workspace-down; }
+    Mod+Ctrl+I         { move-column-to-workspace-up; }
+
+    Mod+Shift+Page_Down { move-workspace-down; }
+    Mod+Shift+Page_Up   { move-workspace-up; }
+    Mod+Shift+U         { move-workspace-down; }
+    Mod+Shift+I         { move-workspace-up; }
+
+    Mod+WheelScrollDown      cooldown-ms=150 { focus-workspace-down; }
+    Mod+WheelScrollUp        cooldown-ms=150 { focus-workspace-up; }
+    Mod+Ctrl+WheelScrollDown cooldown-ms=150 { move-column-to-workspace-down; }
+    Mod+Ctrl+WheelScrollUp   cooldown-ms=150 { move-column-to-workspace-up; }
+
+    Mod+WheelScrollRight      { focus-column-right; }
+    Mod+WheelScrollLeft       { focus-column-left; }
+    Mod+Ctrl+WheelScrollRight { move-column-right; }
+    Mod+Ctrl+WheelScrollLeft  { move-column-left; }
+
+    Mod+Shift+WheelScrollDown      { focus-column-right; }
+    Mod+Shift+WheelScrollUp        { focus-column-left; }
+    Mod+Ctrl+Shift+WheelScrollDown { move-column-right; }
+    Mod+Ctrl+Shift+WheelScrollUp   { move-column-left; }
+
+    Mod+1 { focus-workspace 1; }
+    Mod+2 { focus-workspace 2; }
+    Mod+3 { focus-workspace 3; }
+    Mod+4 { focus-workspace 4; }
+    Mod+5 { focus-workspace 5; }
+    Mod+6 { focus-workspace 6; }
+    Mod+7 { focus-workspace 7; }
+    Mod+8 { focus-workspace 8; }
+    Mod+9 { focus-workspace 9; }
+    Mod+Ctrl+1 { move-column-to-workspace 1; }
+    Mod+Ctrl+2 { move-column-to-workspace 2; }
+    Mod+Ctrl+3 { move-column-to-workspace 3; }
+    Mod+Ctrl+4 { move-column-to-workspace 4; }
+    Mod+Ctrl+5 { move-column-to-workspace 5; }
+    Mod+Ctrl+6 { move-column-to-workspace 6; }
+    Mod+Ctrl+7 { move-column-to-workspace 7; }
+    Mod+Ctrl+8 { move-column-to-workspace 8; }
+    Mod+Ctrl+9 { move-column-to-workspace 9; }
+
+    Mod+BracketLeft  { consume-or-expel-window-left; }
+    Mod+BracketRight { consume-or-expel-window-right; }
+    Mod+Comma  { consume-window-into-column; }
+    Mod+Period { expel-window-from-column; }
+
+    Mod+R { switch-preset-column-width; }
+    Mod+Shift+R { switch-preset-column-width-back; }
+    Mod+Ctrl+Shift+R { switch-preset-window-height; }
+    Mod+Ctrl+R { reset-window-height; }
+    Mod+F { maximize-column; }
+    Mod+Shift+F { fullscreen-window; }
+    Mod+M { maximize-window-to-edges; }
+    Mod+Ctrl+F { expand-column-to-available-width; }
+    Mod+C { center-column; }
+    Mod+Ctrl+C { center-visible-columns; }
+
+    Mod+Minus { set-column-width "-10%"; }
+    Mod+Equal { set-column-width "+10%"; }
+    Mod+Shift+Minus { set-window-height "-10%"; }
+    Mod+Shift+Equal { set-window-height "+10%"; }
+
+    Mod+V       { toggle-window-floating; }
+    // niri's Mod+Shift+V moved here: VeloGuard's VPN menu is Mod+Shift+V everywhere
+    Mod+Alt+V   { switch-focus-between-floating-and-tiling; }
+    Mod+W { toggle-column-tabbed-display; }
+
+    Print { screenshot; }
+    Ctrl+Print { screenshot-screen; }
+    Alt+Print { screenshot-window; }
+
+    Mod+Escape allow-inhibiting=false { toggle-keyboard-shortcuts-inhibit; }
+    // Quit: Ctrl+Alt+Delete, or the power menu's Log out (Mod+X)
+    Ctrl+Alt+Delete { quit; }
+    Mod+Shift+P { power-off-monitors; }
+}
+
+// The active VeloGuard theme's colours (written by veloguard-theme).
+include optional=true "~/.config/veloguard/generated/niri-colors.kdl"
