@@ -689,7 +689,16 @@ def _run_safe(rest: list[str]) -> int:
 # ===========================================================================
 
 def _integrity(rest: list[str]) -> int:
-    """guardd integrity update | check — the guard checks its own files."""
+    """guardd integrity update | check — the guard checks its own files.
+    The Rust check (rust/src/integrity.rs: covers hidden plugin files too, and
+    never loses a finding) runs when installed root-owned; this is the fallback."""
+    rs = Path(__file__).resolve().parent.parent / "bin" / "veloguard-integrity"
+    try:
+        st = rs.stat()
+        if st.st_uid == 0 and not st.st_mode & 0o022 and os.access(rs, os.X_OK):
+            os.execv(str(rs), [str(rs), *(rest or ["check"])])
+    except OSError:
+        pass
     from . import incident, integrity
     sub = rest[0] if rest else "check"
     if os.geteuid() != 0:

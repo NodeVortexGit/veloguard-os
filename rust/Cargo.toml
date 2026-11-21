@@ -15,6 +15,10 @@ sha2 = "0.10"
 name = "veloguard-mcp"
 path = "src/bin/veloguard-mcp.rs"
 
+[[bin]]
+name = "veloguard-integrity"
+path = "src/bin/veloguard-integrity.rs"
+
 [profile.release]
 opt-level = 3
 lto = true

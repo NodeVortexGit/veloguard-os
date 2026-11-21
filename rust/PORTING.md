@@ -11,7 +11,9 @@ Build and test:
     cd rust && cargo build --release && cargo test --release
     cd ../veloguard && python3 -m unittest discover -s tests   # includes RustMCPServer
 
-Deploy: `target/release/veloguard-mcp` → `/opt/veloguard/bin/veloguard-mcp-rs`
+Deploy: `target/release/veloguard-integrity` → `/opt/veloguard/bin/veloguard-integrity`
+(`veloguard integrity …` hands off to it when root-owned),
+`target/release/veloguard-mcp` → `/opt/veloguard/bin/veloguard-mcp-rs`
 (the `veloguard-mcp` launcher prefers it; `VELOGUARD_MCP_PYTHON=1` falls back),
 `target/release/veloguard-ask` → `/opt/veloguard/bin/veloguard-ask` (the root
 helper only uses it root-owned, not group/world-writable).
@@ -31,7 +33,9 @@ helper only uses it root-owned, not group/world-writable).
 | guardd/cmdguard.py                      | —                        | next (the rules the root helper and every hook use) |
 | agent hooks (guard_hook.py, register.ts)| —                        | after cmdguard: one `veloguard-hook` binary |
 | dispatch, actions, policy, authchan, executor | —                  | then: the guard actions (off the bridge) |
-| incident, memory, netclass, updater, integrity, state | —          | then |
+| guardd/integrity.py                     | src/integrity.rs (bin veloguard-integrity) | **ported** — also covers hidden plugin files (.mcp.json); a finding is audited first, never lost; Python kept as fallback until the ISO builds Rust |
+| guardd/incident.py (save, announce)     | src/incident.rs          | **ported** — as root always the system store /var/lib/veloguard/incidents |
+| incident (read side), memory, netclass, updater, state | —        | then |
 | watch, honeypot, microvm, vlayer        | —                        | then |
 | ai_adapter, analyst, agent, snn, voice, agent_plugins | —          | last (the AI plane) |
 | __main__.py (the `veloguard` CLI)       | —                        | last, as subcommands of one binary |

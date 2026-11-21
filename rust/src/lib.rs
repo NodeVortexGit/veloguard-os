@@ -12,6 +12,8 @@ pub mod approve;
 pub mod audit;
 pub mod bridge;
 pub mod elevation;
+pub mod incident;
+pub mod integrity;
 pub mod mcp;
 pub mod osstate;
 pub mod procs;
