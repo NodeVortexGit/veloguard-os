@@ -1,0 +1,14 @@
+[package]
+name = "veloguard-ask"
+version = "0.1.0"
+edition = "2024"
+description = "VeloGuardOS approval dialog: Esc = Deny, Ctrl+Enter = Approve"
+license = "GPL-2.0-only"
+publish = false
+
+[dependencies]
+gtk4 = "0.10"
+
+[[bin]]
+name = "veloguard-ask"
+path = "src/main.rs"

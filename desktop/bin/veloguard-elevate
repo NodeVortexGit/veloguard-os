@@ -2,30 +2,41 @@
 #
 # veloguard-elevate — run ONE command as root after you approve it on screen.
 # This is what `sudo` becomes inside an AI agent's session (veloguard-agent
-# puts /usr/share/veloguard/agents/bin first on the agent's PATH): agents have
-# no terminal to type a password into, so the request is shown to you — agent,
-# exact command, folder — with Approve / Deny (Deny is the default; no answer
-# in 2 minutes is a Deny). Every request is in the guard's audit log.
+# puts /usr/share/veloguard/agents/bin first on the agent's PATH), and what the
+# guard's MCP tool `sudo_run` uses: agents have no terminal to type a password
+# into, so the request is shown to you — which agent (read from the process
+# tree, not taken on its word), the exact command, the folder, its reason —
+# with Approve / Deny (Deny is the default; no answer in 2 minutes is a Deny).
+# Every request is in the guard's audit log.
 #
-#   veloguard-elevate [--agent NAME] [--] COMMAND [ARGS...]
-#   veloguard-elevate --grant 3h       # from inside an agent: ask once to let THIS
-#                                      #   agent run root commands unasked for a while
-#   veloguard-elevate --revoke | --grant-status
+#   veloguard-elevate [--agent NAME] [--reason TEXT] [--timeout SECS] [--] COMMAND [ARGS...]
+#   veloguard-elevate [--reason TEXT] --grant 90m|2h|1h30m   # from inside an agent: ask once
+#                                      #   to let THIS agent run root commands unasked
+#                                      #   for that long (at most 4 h)
+#   veloguard-elevate --revoke | --grant-status [--json]
 #
 # The dialog is drawn by the root helper (veloguard-elevate-root) on your real
 # compositor, so the program asking can't answer it for you.
 set -euo pipefail
 ROOT_HELPER=/opt/veloguard/bin/veloguard-elevate-root
 
-usage() { sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'; }
 agent="${VELOGUARD_AGENT:-a program}"
+opts=()                                   # passed through to the root helper
 while [ $# -gt 0 ]; do
   case "$1" in
     --agent)   [ $# -ge 2 ] || { usage >&2; exit 2; }; agent="$2"; shift 2 ;;
     --agent=*) agent="${1#*=}"; shift ;;
+    --reason|--timeout)
+               [ $# -ge 2 ] || { usage >&2; exit 2; }; opts+=("$1" "$2"); shift 2 ;;
+    --reason=*|--timeout=*) opts+=("${1%%=*}" "${1#*=}"); shift ;;
+    --report|--json) opts+=("$1"); shift ;;
     --grant)   [ $# -ge 2 ] || { usage >&2; exit 2; }
-               exec pkexec "$ROOT_HELPER" --agent "$agent" --grant "$2" ;;
-    --revoke|--grant-status) exec pkexec "$ROOT_HELPER" --agent "$agent" "$1" ;;
+               exec pkexec "$ROOT_HELPER" --agent "$agent" "${opts[@]}" --grant "$2" ;;
+    --revoke|--grant-status)
+               flag="$1"; shift
+               [ "${1:-}" = --json ] && opts+=(--json)
+               exec pkexec "$ROOT_HELPER" --agent "$agent" "${opts[@]}" "$flag" ;;
     -h|--help) usage; exit 0 ;;
     --)        shift; break ;;
     -*)        usage >&2; exit 2 ;;
@@ -34,4 +45,4 @@ while [ $# -gt 0 ]; do
 done
 [ $# -gt 0 ] || { usage >&2; exit 2; }
 if [ "$(id -u)" -eq 0 ]; then exec "$@"; fi          # already root: nothing to ask
-exec pkexec "$ROOT_HELPER" --agent "$agent" --cwd "$PWD" -- "$@"
+exec pkexec "$ROOT_HELPER" --agent "$agent" --cwd "$PWD" "${opts[@]}" -- "$@"

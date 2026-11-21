@@ -9,6 +9,12 @@ Autonomy levels:
   guarded — protective actions run; destructive ones need an interactive yes.
   full    — destructive actions auto-approved (the session is standing consent);
             policy DENY still blocks, everything is still audited.
+
+"op" tools (root, processes, services) have their own guard: root always goes
+to the person's Approve in the root dialog (autonomy never stands in for it —
+only a grant the person approved does), and signalling a protected process or
+stopping a guard unit is put to the person as an Approve/Deny pop-up.
+`ctx` carries who is calling (guardd/agentid.py) and from where.
 """
 
 from __future__ import annotations
@@ -65,17 +71,166 @@ def _read_tool(name: str, args: dict) -> dict:
     if name == "recall":
         return {"ok": True, "data": {
             "matches": memory.SemanticMemory().recall(args.get("query", ""))}}
+    if name in _STATE_READS:
+        from . import osstate, procs
+        try:
+            return _STATE_READS[name](args, procs, osstate)
+        except (ValueError, TypeError) as e:
+            return {"ok": False, "status": "invalid", "error": str(e)}
     return {"ok": False, "error": f"no read handler for {name}"}
+
+
+def _int(args: dict, key: str, default=None, lo=None, hi=None):
+    v = args.get(key, default)
+    if v is None:
+        raise ValueError(f"{key} is required")
+    if isinstance(v, bool) or not isinstance(v, (int, str)) or (isinstance(v, str) and not v.strip().lstrip("-").isdigit()):
+        raise ValueError(f"{key} must be a whole number")
+    v = int(v)
+    if lo is not None:
+        v = max(lo, v)
+    if hi is not None:
+        v = min(hi, v)
+    return v
+
+
+def _opt(args: dict, key: str, allowed: tuple | None = None, default=None):
+    v = args.get(key, default)
+    if v is None:
+        return default
+    if not isinstance(v, str):
+        raise ValueError(f"{key} must be a string")
+    if allowed and v not in allowed:
+        raise ValueError(f"{key} is one of {', '.join(allowed)}")
+    return v
+
+
+def _wrap(d: dict) -> dict:
+    return d if "ok" in d else {"ok": True, "data": d}
+
+
+_STATE_READS = {
+    "process_list": lambda a, P, O: {"ok": True, "data": P.list_processes(
+        _opt(a, "name"), _opt(a, "user"), _opt(a, "sort", ("cpu", "mem", "pid", "start", "name"), "cpu"),
+        _int(a, "limit", 40, 1, 500))},
+    "process_info": lambda a, P, O: _wrap(P.process_info(_int(a, "pid"))),
+    "system_state": lambda a, P, O: {"ok": True, "data": O.system_state()},
+    "network_state": lambda a, P, O: {"ok": True, "data": O.network_state()},
+    "services": lambda a, P, O: _wrap(O.services(
+        _opt(a, "scope", ("system", "user"), "system"), _opt(a, "unit"),
+        _opt(a, "state", ("failed", "running", "all"), "failed"), _int(a, "limit", 100, 1, 1000))),
+    "journal": lambda a, P, O: _wrap(O.journal(
+        _opt(a, "unit"), _opt(a, "scope", ("system", "user"), "system"),
+        _opt(a, "priority", O.PRIORITIES, "warning"), _int(a, "lines", 50, 1, 500),
+        _opt(a, "since"), bool(a.get("this_boot", True)))),
+}
+
+
+# --- "op" tools -------------------------------------------------------------------
+
+def _ask_person(ctx: dict, what: str, why: str, cls: str, reason: str = "") -> tuple[bool, str]:
+    from . import agentid, approve
+    who = ctx.get("who") or agentid.me()
+    shown = what + (f"\n\nIts reason, in its own words: {reason}" if reason else "")
+    ok, how = approve.ask(who.get("name", "An AI agent"), shown, why, cls,
+                          ctx.get("cwd"), who=who)
+    record({"control": "agent-approval", "source": "mcp", "agent": who.get("name"),
+            "who": agentid.one_line(who), "class": cls, "reason": why, "what": what[:2000],
+            "result": "approved" if ok else "denied", "how": how})
+    return ok, how
+
+
+def _process_signal(args: dict, ctx: dict) -> dict:
+    from . import procs
+    pid = _int(args, "pid")
+    sig = (_opt(args, "signal", None, "TERM") or "TERM").upper().removeprefix("SIG")
+    reason = (_opt(args, "reason") or "")[:300]
+    c = procs.check_signal(pid, sig)
+    base = {"source": "mcp", "tool": "process_signal", "pid": pid, "signal": sig}
+    if c["decision"] in ("refuse", "needs_root"):
+        record({**base, "result": c["decision"], "why": c["why"]})
+        return {"ok": False, "status": c["decision"], "error": c["why"],
+                **({"hint": c["hint"]} if c.get("hint") else {})}
+    p = c["process"]
+    how = "allowed (your own process)"
+    if c["decision"] == "ask":
+        ok, how = _ask_person(ctx, f"kill -{sig} {pid}   # {p['name']}: {p['cmd'][:300]}",
+                              c["why"], c["class"], reason)
+        if not ok:
+            record({**base, "result": "denied", "how": how})
+            return {"ok": False, "status": "denied", "how": how, "why": c["why"],
+                    "hint": "The person said no — leave that process alone." if "denied" in how
+                    else f"Nobody could be asked ({how}) — leave that process alone."}
+    try:
+        procs.send_signal(p, sig)
+    except (ProcessLookupError, PermissionError, OSError) as e:
+        record({**base, "result": "failed", "error": str(e)})
+        return {"ok": False, "status": "failed", "error": str(e)}
+    record({**base, "result": "executed", "name": p["name"], "how": how})
+    return {"ok": True, "status": "sent", "pid": pid, "name": p["name"], "signal": sig, "how": how}
+
+
+def _process_priority(args: dict, ctx: dict) -> dict:
+    from . import procs
+    r = procs.set_priority(_int(args, "pid"), _int(args, "nice"))
+    record({"source": "mcp", "tool": "process_priority", "args": args,
+            "result": "executed" if r.get("ok") else r.get("status", "failed")})
+    return r
+
+
+def _service_control(args: dict, ctx: dict) -> dict:
+    from . import osstate
+    unit = _opt(args, "unit") or ""
+    action = _opt(args, "action", osstate.SERVICE_ACTIONS) or ""
+    scope = _opt(args, "scope", ("user", "system"), "user")
+    c = osstate.check_service(unit, action, scope)
+    base = {"source": "mcp", "tool": "service_control", "unit": unit, "action": action, "scope": scope}
+    if c["decision"] in ("refuse", "needs_root"):
+        record({**base, "result": c["decision"]})
+        return {"ok": False, "status": c["decision"], "error": c["why"],
+                **({"hint": c["hint"]} if c.get("hint") else {})}
+    if c["decision"] == "ask":
+        ok, how = _ask_person(ctx, f"systemctl --user {action} {unit}", c["why"], c["class"],
+                              (_opt(args, "reason") or "")[:300])
+        if not ok:
+            record({**base, "result": "denied", "how": how})
+            return {"ok": False, "status": "denied", "how": how}
+    r = osstate.control_service(unit, action)
+    record({**base, "result": "executed" if r["ok"] else "failed", "exit_code": r["exit_code"]})
+    return r
+
+
+def _ops() -> dict:
+    from . import elevation as el
+    return {"sudo_run": el.sudo_run, "sudo_grant": el.sudo_grant, "sudo_status": el.sudo_status,
+            "sudo_result": el.sudo_result, "sudo_revoke": el.sudo_revoke,
+            "ask_permission": el.ask_permission, "process_signal": _process_signal,
+            "process_priority": _process_priority, "service_control": _service_control}
+
+
+def _run_op(name: str, spec: dict, args: dict, autonomy: str, ctx: dict | None) -> dict:
+    if spec.get("mutating") and autonomy == "read":
+        return {"ok": False, "status": "read_only",
+                "reason": "autonomy=read: mutating tools are disabled"}
+    fn = _ops().get(name)
+    if fn is None:
+        return {"ok": False, "error": f"no handler for {name}"}
+    try:
+        return fn(args, ctx or {})
+    except (ValueError, TypeError) as e:
+        return {"ok": False, "status": "invalid", "error": str(e)}
 
 
 def execute_tool(name: str, args: dict, *, apply: bool = False,
                  autonomy: str = "guarded", interactive: bool = False,
-                 confirm=None, source: str = "agent") -> dict:
+                 confirm=None, source: str = "agent", ctx: dict | None = None) -> dict:
     spec = toolmod.get(name)
     if not spec:
         return {"ok": False, "error": f"unknown tool: {name}"}
     if spec["kind"] == "read":
         return _read_tool(name, args)
+    if spec["kind"] == "op":
+        return _run_op(name, spec, args, autonomy, ctx)
 
     if autonomy == "read":
         return {"ok": False, "status": "read_only",

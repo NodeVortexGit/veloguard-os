@@ -1083,5 +1083,143 @@ class IncidentHandOff(unittest.TestCase):
             popen.assert_not_called()
 
 
+class AgentIdentity(unittest.TestCase):
+    """The dialog names the exact agent, read from the process tree."""
+
+    def p(self, exe, argv):
+        return {"pid": 2, "ppid": 1, "start": "0", "uid": 1000, "exe": exe, "argv": argv, "tty": 0}
+
+    def test_known_agents_are_recognised_by_their_programs(self):
+        from guardd import agentid
+        r = agentid.recognise(self.p("/home/u/.local/share/claude/versions/2.1.330", ["claude"]))
+        self.assertEqual((r["label"], r["version"]), ("Claude Code", "2.1.330"))
+        r = agentid.recognise(self.p("/home/u/.codex/packages/app-server-daemon/releases/x/bin/codex",
+                                     ["codex", "app-server"]))
+        self.assertEqual(r["label"], "Codex")
+        self.assertIn("app-server", r["role"])
+        self.assertIsNone(agentid.recognise(self.p("/usr/bin/bash", ["bash"])))
+
+    def test_a_claim_that_doesnt_match_is_shown(self):
+        from guardd import agentid
+        d = agentid.describe(os.getpid(), "Definitely Not This", os.getuid())
+        if d["verified"]:
+            self.assertEqual(d["claimed"], "Definitely Not This")
+        self.assertIn("process", agentid.one_line(d))
+        self.assertNotIn("<script>", agentid.pango({**d, "name": "<script>"}))
+
+
+class ElevateRootOptions(unittest.TestCase):
+    """Agent-picked grant durations, --reason, --timeout, the --report line."""
+
+    def setUp(self):
+        import importlib.machinery, importlib.util
+        path = str(HERE.parent / "bin" / "veloguard-elevate-root")
+        loader = importlib.machinery.SourceFileLoader("vg_elevate_root2", path)
+        self.m = importlib.util.module_from_spec(importlib.util.spec_from_loader("vg_elevate_root2", loader))
+        loader.exec_module(self.m)
+
+    def test_durations(self):
+        d = self.m._duration
+        self.assertEqual(d("45m"), (2700, 2700))
+        self.assertEqual(d("1h30m"), (5400, 5400))
+        self.assertEqual(d("2h"), (7200, 7200))
+        self.assertEqual(d("3"), (10800, 10800))                 # bare = hours, as before
+        self.assertEqual(d("9h"), (4 * 3600, 9 * 3600))          # capped at 4 h, the ask kept
+        for bad in ("0m", "forever", "1d", ""):
+            with self.assertRaises(SystemExit):
+                d(bad)
+
+    def test_options_before_the_command(self):
+        o = self.m.parse(["--agent", "Codex 0.1", "--cwd", "/tmp", "--reason", "update", "--timeout", "90",
+                          "--report", "--", "pacman", "-Syu"])
+        self.assertEqual((o["agent"], o["cwd"], o["reason"], o["timeout"], o["cmd"]),
+                         ("Codex 0.1", "/tmp", "update", 90, ["pacman", "-Syu"]))
+        self.assertTrue(self.m.REPORT)
+        g = self.m.parse(["--agent", "x", "--reason", "r", "--grant", "90m"])
+        self.assertEqual((g["mode"], g["grant"]), ("grant", "90m"))
+        self.assertEqual(self.m.parse(["--grant-status", "--json"])["json"], True)
+
+    def test_reason_is_one_short_line(self):
+        r = self.m.clean_reason("a\nb\x1b[31m " + "x" * 400)
+        self.assertNotIn("\n", r)
+        self.assertNotIn("\x1b", r)
+        self.assertLessEqual(len(r), self.m.REASON_MAX + 2)
+
+    def test_the_decision_line_is_json(self):
+        import contextlib, io
+        self.m.REPORT = True
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            self.m.die("denied by you", decision="denied")
+        line = err.getvalue().splitlines()[0]
+        self.assertTrue(line.startswith("VELOGUARD-ELEVATE "))
+        self.assertEqual(json.loads(line.split(" ", 1)[1])["decision"], "denied")
+
+    def test_the_dialog_is_veloguards_own_only_when_root_owned(self):
+        self.assertIn(self.m.dialog_program(), ("zenity", str(self.m.HERE / "bin" / "veloguard-ask")))
+
+
+class ElevateWrapper(unittest.TestCase):
+    """desktop/bin/veloguard-elevate passes the new options to the root helper."""
+
+    def run_wrapper(self, *args):
+        d = Path(tempfile.mkdtemp(prefix="vg-pkexec-"))
+        (d / "pkexec").write_text('#!/bin/bash\nprintf "%s\\n" "$@"\n')
+        (d / "pkexec").chmod(0o755)
+        wrapper = HERE.parent.parent / "desktop" / "bin" / "veloguard-elevate"
+        return subprocess.run(["bash", str(wrapper), *args], capture_output=True, text=True, timeout=10,
+                              env={"PATH": f"{d}:/usr/bin:/bin", "VELOGUARD_AGENT": "Codex"}).stdout.splitlines()
+
+    def test_reason_timeout_and_report_reach_the_helper(self):
+        out = self.run_wrapper("--reason", "why", "--timeout", "60", "--report", "--", "id")
+        self.assertEqual(out[0], "/opt/veloguard/bin/veloguard-elevate-root")
+        i = out.index("--")
+        self.assertEqual(out[i + 1:], ["id"])
+        for flag, val in (("--reason", "why"), ("--timeout", "60")):
+            self.assertEqual(out[out.index(flag) + 1], val)
+        self.assertIn("--report", out[:i])
+
+    def test_grant_with_a_reason_and_status_as_json(self):
+        out = self.run_wrapper("--reason", "night build", "--grant", "2h")
+        self.assertEqual(out[-2:], ["--grant", "2h"])
+        self.assertIn("night build", out)
+        self.assertIn("--json", self.run_wrapper("--grant-status", "--json"))
+
+
+RUST_MCP = HERE.parent.parent / "rust" / "target" / "release" / "veloguard-mcp"
+
+
+@unittest.skipUnless(RUST_MCP.exists(), "the Rust MCP server isn't built (cd rust && cargo build --release)")
+class RustMCPServer(unittest.TestCase):
+    """The Rust server speaks the same protocol, and a waiting root dialog never blocks it."""
+
+    def test_handshake_tools_and_no_blocking(self):
+        d = Path(tempfile.mkdtemp(prefix="vg-rsmcp-"))
+        stub = d / "veloguard-elevate"
+        stub.write_text('#!/bin/bash\nsleep 2\necho \'VELOGUARD-ELEVATE {"decision": "denied", "how": "denied by you"}\' >&2\nexit 1\n')
+        stub.chmod(0o755)
+        msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                 "params": {"protocolVersion": "2025-06-18", "clientInfo": {"name": "codex-mcp-client", "version": "1"}}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                 "params": {"name": "sudo_run", "arguments": {"command": ["id"], "reason": "t", "cwd": "/"}}},
+                {"jsonrpc": "2.0", "id": 4, "method": "ping"}]
+        p = subprocess.run([str(RUST_MCP)], input="not json\n" + "\n".join(json.dumps(m) for m in msgs) + "\n",
+                           capture_output=True, text=True, timeout=60,
+                           env={**os.environ, "VELOGUARD_ELEVATE": str(stub), "VELOGUARD_HOME": str(HERE.parent),
+                                "VELOGUARD_AUDIT_LOG": str(d / "audit.log")})
+        out = [json.loads(x) for x in p.stdout.splitlines()]
+        ids = [m.get("id") for m in out]
+        self.assertEqual(out[0]["error"]["code"], -32700)
+        self.assertLess(ids.index(4), ids.index(3))          # the ping wasn't held up by the dialog
+        names = {t["name"] for t in next(m for m in out if m.get("id") == 2)["result"]["tools"]}
+        self.assertTrue({"sudo_run", "sudo_grant", "process_list", "system_state", "block_ip"} <= names)
+        res = json.loads(next(m for m in out if m.get("id") == 3)["result"]["content"][0]["text"])
+        self.assertEqual(res["status"], "denied")
+        self.assertIn("hint", res)
+        ok, msg = audit.verify(d / "audit.log")
+        self.assertTrue(ok, msg)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # veloguard-mcp — the VeloGuard MCP server (stdio). Attach any MCP agent
-# (Claude Code, Codex, custom) to the kernel tools, through the guard.
+# (Claude Code, Codex, Kimi Code, OpenClaw, Hermes, custom) to the machine's
+# tools, through the guard.
 #
 # Claude Code (.mcp.json):
 #   {"mcpServers": {"veloguard": {"command": "veloguard-mcp",
@@ -10,9 +11,21 @@
 # Autonomy: VELOGUARD_AGENT_AUTONOMY = read | guarded | full   (default guarded)
 # Enforce : VELOGUARD_APPLY=1 to touch the kernel for real     (default dry-run)
 #
+# The server is the Rust one (bin/veloguard-mcp-rs, built from rust/) when it
+# is installed; the Python one (guardd/mcp_server.py) otherwise, or with
+# VELOGUARD_MCP_PYTHON=1. Guard actions not ported to Rust yet run in the
+# Python guard either way.
+#
 # Resolve symlinks: /usr/local/bin/<this> -> /opt/veloguard/bin/<this>. With a
 # bare dirname "$0" HOME_DIR became /usr/local and `-m guardd` didn't exist.
 HOME_DIR="${VELOGUARD_HOME:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
+# The folder the agent works in, before we cd away from it: sudo_run runs there
+# by default, and the dialog shows it.
+export VELOGUARD_CLIENT_CWD="${VELOGUARD_CLIENT_CWD:-$PWD}"
+RS="$HOME_DIR/bin/veloguard-mcp-rs"
+if [ -x "$RS" ] && [ "${VELOGUARD_MCP_PYTHON:-0}" != 1 ]; then
+  exec "$RS" "$@"
+fi
 VENV="${VELOGUARD_VENV:-$HOME_DIR/.venv}"
 PY="python3"; [ -x "$VENV/bin/python" ] && PY="$VENV/bin/python"
 cd "$HOME_DIR"
