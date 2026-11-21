@@ -356,9 +356,9 @@ pub enum ServiceDecision {
     Refuse(String),
 }
 
-/// What service_control would do. Mirrors cmdguard's rule for switching the
-/// guard off (`systemctl stop|… veloguard*|guardd|nftables|…` → the person
-/// decides) until cmdguard itself is ported.
+/// What service_control would do (guardd/osstate.py check_service): what
+/// cmdguard says of `systemctl --user ACTION UNIT`, and a stop or restart of
+/// anything named veloguard/guardd is the person's call too.
 pub fn check_service(unit: &str, action: &str, scope: &str) -> ServiceDecision {
     if !unit_ok(unit) {
         return ServiceDecision::Refuse("not a unit name".into());
@@ -369,10 +369,13 @@ pub fn check_service(unit: &str, action: &str, scope: &str) -> ServiceDecision {
     if scope != "user" {
         return ServiceDecision::NeedsRoot { hint: format!("sudo_run with command [\"systemctl\", \"{action}\", \"{unit}\"]") };
     }
+    let (v, why, cls) = crate::cmdguard::check_detail(&format!("systemctl --user {action} {unit}"));
     let u = unit.to_lowercase();
-    let guardish = ["veloguard", "guardd", "nftables", "networkmanager-dispatcher"].iter().any(|g| u.contains(g));
-    if guardish && ["stop", "restart", "reset-failed"].contains(&action) {
-        return ServiceDecision::Ask { why: "switches off part of VeloGuard itself".into(), class: "disable" };
+    if v == "deny" || (["stop", "restart"].contains(&action) && (u.contains("veloguard") || u.contains("guardd"))) {
+        return ServiceDecision::Ask {
+            why: if why.is_empty() { "is part of VeloGuard itself".into() } else { why },
+            class: if cls.is_empty() { "disable" } else { cls },
+        };
     }
     ServiceDecision::Allow
 }

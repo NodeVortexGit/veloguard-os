@@ -11,6 +11,7 @@ pub mod agentid;
 pub mod approve;
 pub mod audit;
 pub mod bridge;
+pub mod cmdguard;
 pub mod elevation;
 pub mod incident;
 pub mod integrity;
