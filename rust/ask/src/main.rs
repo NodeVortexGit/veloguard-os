@@ -9,6 +9,12 @@
 //! Approve — the button and Ctrl+Enter — arms only after 1 s: a dialog that
 //! pops up while you type (Ctrl+Enter sends a message in many chat apps) can't
 //! be approved by the keystroke you were already making.
+//! And only once the whole question has been on screen: the requester writes
+//! most of the text, and a long command or folder pushed the guard's warning
+//! below the fold of the scroll area (560 px) with no sign it was there. Text
+//! that doesn't fit gets a real scrollbar and a "scroll to read the rest"
+//! line, and Approve stays off until it has been scrolled to the end
+//! (wheel, or PageDown / ↓ / End).
 //!
 //! Same flags and exit codes as zenity, so callers swap the program name:
 //!   veloguard-ask --question --title T --text MARKUP --ok-label Approve
@@ -28,6 +34,18 @@ use std::rc::Rc;
 use std::time::Duration;
 
 const ARM_AFTER: Duration = Duration::from_millis(1000);
+
+/// Whether the scroll area shows its last line now. Before GTK has laid the
+/// label out, the adjustment is all zeros — that is "not yet", never "yes".
+fn at_end(value: f64, page: f64, upper: f64) -> bool {
+    page > 0.0 && upper > 0.0 && value + page >= upper - 1.0
+}
+
+/// Approve may answer: armed (1 s passed) and the whole text has been on
+/// screen — now, or once, by scrolling to the end.
+fn may_approve(armed: bool, reached_end: bool, value: f64, page: f64, upper: f64) -> bool {
+    armed && (reached_end || at_end(value, page, upper))
+}
 
 struct Opts {
     title: String,
@@ -110,9 +128,17 @@ fn main() {
     label.set_max_width_chars(80);
     label.set_selectable(false);
     let scroll = gtk::ScrolledWindow::builder().child(&label).hscrollbar_policy(gtk::PolicyType::Never)
-        .propagate_natural_height(true).max_content_height(560).hexpand(true).build();
+        .propagate_natural_height(true).max_content_height(560).hexpand(true)
+        .overlay_scrolling(false).build();             // a visible scrollbar, not one that appears on hover
     row.append(&scroll);
     outer.append(&row);
+
+    let more = gtk::Label::new(None);
+    more.set_xalign(0.0);
+    more.set_markup("<span foreground='#e01b24'><b>↓ There's more below — scroll to read the rest \
+                     before you can approve.</b></span>");
+    more.set_visible(false);
+    outer.append(&more);
 
     let hint = gtk::Label::new(None);
     hint.set_xalign(0.0);
@@ -144,18 +170,48 @@ fn main() {
             win.close();
         })
     };
+    // Approve answers only once the whole question has been on screen.
+    let adj = scroll.vadjustment();
+    let reached_end = Rc::new(Cell::new(false));
+    let ok = {
+        let (armed, reached_end, adj) = (armed.clone(), reached_end.clone(), adj.clone());
+        Rc::new(move || may_approve(armed.get(), reached_end.get(), adj.value(), adj.page_size(), adj.upper()))
+    };
+    let refresh = {
+        let (ok, approve, more, reached_end, adj) =
+            (ok.clone(), approve.clone(), more.clone(), reached_end.clone(), adj.clone());
+        Rc::new(move || {
+            approve.set_sensitive(ok());
+            let seen = reached_end.get() || at_end(adj.value(), adj.page_size(), adj.upper());
+            more.set_visible(!seen && adj.page_size() > 0.0);
+        })
+    };
+    {
+        // Latched only by scrolling to the end; layout changes (wrapping,
+        // a resize) re-check without latching, so a first, too-small layout
+        // can't count as "seen".
+        let (reached_end, r) = (reached_end.clone(), refresh.clone());
+        adj.connect_value_changed(move |a| {
+            if a.upper() > a.page_size() && at_end(a.value(), a.page_size(), a.upper()) {
+                reached_end.set(true);
+            }
+            r();
+        });
+        let r = refresh.clone();
+        adj.connect_changed(move |_| r());
+    }
     {
         let f = finish.clone();
         deny.connect_clicked(move |_| f(1));
     }
     {
-        let (f, armed) = (finish.clone(), armed.clone());
-        approve.connect_clicked(move |_| if armed.get() { f(0) });
+        let (f, ok) = (finish.clone(), ok.clone());
+        approve.connect_clicked(move |_| if ok() { f(0) });
     }
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
-        let (f, armed) = (finish.clone(), armed.clone());
+        let (f, ok, adj) = (finish.clone(), ok.clone(), adj.clone());
         keys.connect_key_pressed(move |_, key, _, state| {
             if key == gdk::Key::Escape {
                 f(1);
@@ -163,10 +219,25 @@ fn main() {
             }
             let enter = matches!(key, gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter);
             if enter && state.contains(gdk::ModifierType::CONTROL_MASK) {
-                if armed.get() {
+                if ok() {
                     f(0);
                 }
                 return glib::Propagation::Stop; // early Ctrl+Enter does nothing — never a Deny by surprise either
+            }
+            // Read with the keyboard: focus stays on Deny, the keys scroll the text.
+            let (v, page, top) = (adj.value(), adj.page_size(), adj.upper() - adj.page_size());
+            let to = match key {
+                gdk::Key::Page_Down | gdk::Key::KP_Page_Down => Some(v + page * 0.9),
+                gdk::Key::Page_Up | gdk::Key::KP_Page_Up => Some(v - page * 0.9),
+                gdk::Key::Down | gdk::Key::KP_Down => Some(v + 40.0),
+                gdk::Key::Up | gdk::Key::KP_Up => Some(v - 40.0),
+                gdk::Key::End | gdk::Key::KP_End => Some(top),
+                gdk::Key::Home | gdk::Key::KP_Home => Some(0.0),
+                _ => None,
+            };
+            if let Some(to) = to {
+                adj.set_value(to.clamp(0.0, top.max(0.0)));
+                return glib::Propagation::Stop;
             }
             glib::Propagation::Proceed
         });
@@ -180,10 +251,10 @@ fn main() {
         });
     }
     {
-        let (armed, approve) = (armed.clone(), approve.clone());
+        let (armed, r) = (armed.clone(), refresh.clone());
         glib::timeout_add_local_once(ARM_AFTER, move || {
             armed.set(true);
-            approve.set_sensitive(true);
+            r();
         });
     }
     {
@@ -204,4 +275,26 @@ fn main() {
     deny.grab_focus();
     main_loop.run();
     std::process::exit(answer.get());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approve_waits_for_the_whole_text() {
+        // not laid out yet (all zeros): never counts as seen
+        assert!(!may_approve(true, false, 0.0, 0.0, 0.0));
+        // fits on screen: approve once armed, not before
+        assert!(may_approve(true, false, 0.0, 300.0, 300.0));
+        assert!(!may_approve(false, false, 0.0, 300.0, 300.0));
+        // taller than the 560-px area: not until it was scrolled to the end
+        assert!(!may_approve(true, false, 0.0, 560.0, 1260.0));
+        assert!(!may_approve(true, false, 600.0, 560.0, 1260.0));
+        assert!(may_approve(true, false, 700.0, 560.0, 1260.0));
+        // scrolled to the end once, then back up: still approvable
+        assert!(may_approve(true, true, 0.0, 560.0, 1260.0));
+        // but never before the 1 s arming, scrolled or not
+        assert!(!may_approve(false, true, 700.0, 560.0, 1260.0));
+    }
 }

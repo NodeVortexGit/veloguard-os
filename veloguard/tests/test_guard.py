@@ -1129,6 +1129,29 @@ class DialogText(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"guardd.approve": None}):
             self.assertEqual(root.visible("a\nb\u202ec"), "a\\x0ab\\u202ec")
 
+    def test_root_dialog_puts_the_guard_first_and_shortens_the_folder(self):
+        # A long command, a 4 KB folder and a 300-char reason (all the requester's)
+        # pushed a warning placed after them below the 560-px fold.
+        import importlib.machinery
+        import importlib.util
+        path = Path(__file__).resolve().parents[1] / "bin" / "veloguard-elevate-root"
+        loader = importlib.machinery.SourceFileLoader("vg_elevate_root2", str(path))
+        spec = importlib.util.spec_from_loader("vg_elevate_root2", loader)
+        root = importlib.util.module_from_spec(spec)
+        loader.exec_module(root)
+        who = {"name": "Codex", "pid": 1, "exe": "/x", "verified": True}
+        cwd = "/home/u/" + "/".join(["src"] * 1000)
+        t = root.command_text(who, "bash ./install.sh " + "x" * 1400, cwd,
+                              "switches off part of VeloGuard's own protection", "r" * 300, 0)
+        warn = t.index("VeloGuard: this switches off")
+        self.assertLess(warn, t.index("<tt>"))                       # above the command
+        self.assertLess(warn, t.index("Its reason"))                 # and the reason
+        shown_cwd = t.split("in <tt>")[1].split("</tt>")[0]
+        self.assertLess(len(shown_cwd), 320)
+        self.assertIn(f"{len(cwd) - 240} more characters", shown_cwd)
+        self.assertTrue(shown_cwd.startswith("/home/u/src/") and shown_cwd.endswith("/src"))
+        self.assertIn("in <tt>/home/x</tt>", root.command_text(who, "ls", "/home/x", "", "", 0))
+
 
 class HoneypotLan(unittest.TestCase):
     def test_lan_attackers_blockable_but_never_the_gateway(self):

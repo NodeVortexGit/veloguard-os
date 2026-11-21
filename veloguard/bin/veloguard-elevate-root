@@ -393,19 +393,33 @@ def ask(conn: socket.socket, title: str, text: str) -> str:
     return {0: "approved", 5: "timeout"}.get(code, "denied")
 
 
+CWD_SHOWN = 240     # a longer folder is shortened in the dialog (the command still runs in it)
+
+
+def shorten(s: str, n: int) -> str:
+    """s for the dialog: whole, or its start and end and how much is left out."""
+    if len(s) <= n:
+        return s
+    half = n // 2
+    return f"{s[:half]} … ⟨{len(s) - 2 * half} more characters⟩ … {s[-half:]}"
+
+
 def command_text(who: dict, shown: str, cwd: str, warning: str, reason: str, timeout: int) -> str:
+    """The question. The guard's own lines come FIRST: the command, the folder
+    and the reason are the requester's, and a 1500-character command or a 4 KB
+    folder pushed a warning placed after them below the dialog's fold."""
     e = esc
-    t = (f"<b>{e(who['name'])}</b> wants to run a command as <b>root</b>:\n\n"
-         f"<tt>{e(shown)}</tt>\n\nin <tt>{e(cwd)}</tt>\n")
+    t = f"<b>{e(who['name'])}</b> wants to run a command as <b>root</b>.\n"
+    if warning:
+        t += f"<span foreground='#e01b24'><b>⚠ VeloGuard: this {e(warning)}.</b></span>\n"
     if visible(shown) != shown or visible(cwd) != cwd:
         t += ("<span foreground='#e01b24'><b>⚠ It contains characters that don't show on screen — "
-              "they're written out above (\\n, \\u{…}).</b></span>\n")
+              "they're written out below (\\n, \\u{…}).</b></span>\n")
+    t += f"\n<tt>{e(shown)}</tt>\n\nin <tt>{html.escape(shorten(visible(cwd), CWD_SHOWN))}</tt>\n"
     if timeout:
         t += f"<small>(VeloGuard stops it after {_span(timeout)} if it's still running)</small>\n"
     if reason:
         t += f"\nIts reason, in its own words: <i>{e(reason)}</i>\n"
-    if warning:
-        t += f"\n<span foreground='#e01b24'><b>⚠ VeloGuard: this {e(warning)}.</b></span>\n"
     return t + "\n" + who_pango(who) + "\n\nApprove only if you asked for this."
 
 
