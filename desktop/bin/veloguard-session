@@ -265,13 +265,16 @@ wallpaper() {
       pkill -x swaybg 2>/dev/null; setsid -f swaybg -i "$bg" -m fill >/dev/null 2>&1 ;;
     i3)  feh --no-fehbg --bg-fill "$bg" ;;
     xfce)
-      local p
+      # xfdesktop keys the wallpaper by output name (monitorVirtual-1,
+      # monitoreDP-1, …): every output there is now, and any key it has
+      local p m
+      for m in $(xrandr --listmonitors 2>/dev/null | awk 'NR > 1 { print $NF }'); do
+        xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$m/workspace0/last-image" -n -t string -s "$bg"
+        xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$m/workspace0/image-style" -n -t int -s 5
+      done
       for p in $(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep -E '/last-image$'); do
         xfconf-query -c xfce4-desktop -p "$p" -s "$bg"
-      done
-      # No monitor known yet (first login): the one xfdesktop starts with
-      xfconf-query -c xfce4-desktop -l 2>/dev/null | grep -q last-image \
-        || xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitor0/workspace0/last-image -n -t string -s "$bg" ;;
+      done ;;
     gnome)
       gsettings set org.gnome.desktop.background picture-uri "file://$bg"
       gsettings set org.gnome.desktop.background picture-uri-dark "file://$bg" ;;

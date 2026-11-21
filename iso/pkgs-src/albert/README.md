@@ -8,3 +8,7 @@ ships in iso/pkgs (the ISO's local [veloguard] repo) and the ISO stays
 AUR-free. Rebuild: `makepkg --nodeps` here (deps from [extra]: qcoro,
 qt6-5compat qt6-declarative qt6-scxml qt6-shadertools qt6-svg qtkeychain-qt6;
 make: cmake libqalculate pybind11 qt6-tools), copy the .pkg.tar.zst to iso/pkgs.
+
+First run: `desktop/skel/.local/share/albert/state` records `last_used_version`
+so a new account doesn't get Albert's "This is the first time you've launched
+Albert" box at its first login. Bump it with the package version.

@@ -35,8 +35,8 @@ for_window [class="(?i)blueman-manager"] floating enable
 for_window [class="(?i)zenity"] floating enable
 for_window [window_role="pop-up"] floating enable
 for_window [window_type="dialog"] floating enable
-# the quick panel (Quickshell)
-for_window [class="(?i)quickshell"] floating enable, border none, sticky enable
+# the quick panel (Quickshell): floating, at the pointer (the bar's 󰒓)
+for_window [title="^VeloGuard quick panel$"] floating enable, border pixel 1, sticky enable, move position mouse
 
 # ── VeloGuard ─────────────────────────────────────────────────────────────
 bindsym $mod+Shift+g exec --no-startup-id veloguard-guard-menu

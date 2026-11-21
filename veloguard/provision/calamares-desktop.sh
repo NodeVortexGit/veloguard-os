@@ -115,7 +115,7 @@ case "$DE" in
           xfce4-notifyd xfce4-power-manager mousepad ristretto network-manager-applet
           pavucontrol xorg-server
           xfce4-genmon-plugin xfce4-xkb-plugin xfce4-screensaver xfce4-clipman-plugin
-          rofi xdotool xorg-xset gammastep)
+          rofi xdotool xorg-xset xorg-xrandr gammastep)
     SESSION=/usr/share/xsessions/xfce.desktop ;;
   niri)
     PKGS=(niri xwayland-satellite alacritty xdg-desktop-portal-gnome xdg-desktop-portal-gtk

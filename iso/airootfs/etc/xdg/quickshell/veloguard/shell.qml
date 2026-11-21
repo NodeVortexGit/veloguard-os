@@ -29,6 +29,8 @@ ShellRoot {
     // Hyprland closes the panel on a click elsewhere (focus grab); elsewhere
     // it closes when it loses the keyboard after having had it.
     readonly property bool hypr: !!Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE")
+    readonly property bool onI3: !!Quickshell.env("I3SOCK")
+    readonly property bool wayland: !!Quickshell.env("WAYLAND_DISPLAY")
     property bool hadFocus: false
     onOpenChanged: hadFocus = false
 
@@ -104,28 +106,68 @@ ShellRoot {
     }
     Timer { interval: 2500; running: root.open; repeat: true; onTriggered: stateProc.running = true }
 
-    PanelWindow {
-        id: win
-        visible: root.open
-        anchors { top: true; right: true }
-        exclusionMode: ExclusionMode.Normal
-        exclusiveZone: 0
-        implicitWidth: 430
-        implicitHeight: body.implicitHeight + 28
-        color: "transparent"
-        WlrLayershell.namespace: "veloguard-quickpanel"
-        WlrLayershell.layer: WlrLayer.Overlay
-        WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
-        focusable: true
+    // The panel's window, in the form each desktop takes it:
+    //  - Wayland (Hyprland, niri, COSMIC): a layer over the screen
+    //  - X11 (Xfce): a plain panel window, top right — no layer-shell
+    //    settings there: on X11 they turn the panel into an ordinary window
+    //    that never showed
+    //  - i3: a floating window — i3 turns every X11 panel ("dock") window into
+    //    a full-width bar, which pushed the whole workspace down; i3's own rule
+    //    floats this one at the pointer (the bar's 󰒓, or the mouse for Super+U)
+    LazyLoader {
+        active: root.wayland
+        PanelWindow {
+            id: win
+            visible: root.open
+            anchors { top: true; right: true }
+            exclusionMode: ExclusionMode.Normal
+            exclusiveZone: 0
+            implicitWidth: 430
+            implicitHeight: layerBody.implicitHeight
+            color: "transparent"
+            WlrLayershell.namespace: "veloguard-quickpanel"
+            WlrLayershell.layer: WlrLayer.Overlay
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
 
-        HyprlandFocusGrab {
-            windows: [win]
-            active: root.open && root.hypr
-            onCleared: root.open = false
+            HyprlandFocusGrab {
+                windows: [win]
+                active: root.open && root.hypr
+                onCleared: root.open = false
+            }
+
+            PanelBody { id: layerBody; anchors.fill: parent }
         }
+    }
+    LazyLoader {
+        active: !root.wayland && !root.onI3
+        PanelWindow {
+            visible: root.open
+            anchors { top: true; right: true }
+            margins.top: 32             // under the desktop's own panel (X11 has no layer order)
+            exclusionMode: ExclusionMode.Normal
+            exclusiveZone: 0
+            focusable: true
+            implicitWidth: 430
+            implicitHeight: x11Body.implicitHeight
+            color: "transparent"
+            PanelBody { id: x11Body; anchors.fill: parent }
+        }
+    }
+    LazyLoader {
+        active: !root.wayland && root.onI3
+        FloatingWindow {
+            title: "VeloGuard quick panel"
+            visible: root.open
+            implicitWidth: 430
+            implicitHeight: floatBody.implicitHeight
+            color: "transparent"
+            PanelBody { id: floatBody; anchors.fill: parent }
+        }
+    }
 
-        Rectangle {
-            anchors.fill: parent
+    // ── the panel itself ────────────────────────────────────────────────
+    component PanelBody: Rectangle {
+            implicitHeight: body.implicitHeight + 28
             color: root.glass
             border.color: root.edge
             border.width: 1
@@ -278,7 +320,6 @@ ShellRoot {
                 }
             }
         }
-    }
 
     // ── small building blocks ───────────────────────────────────────────
     component Toggle: Rectangle {
